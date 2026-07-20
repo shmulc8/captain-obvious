@@ -13,7 +13,7 @@ by `--fix --aggressive`), or `report-only` (never auto-removed).
 | `constant-assert` | Tautologies: `expect(true).toBe(true)`, `assert 1 == 1`, `expect(x).toBe(x)`, `assert x == x` on side-effect-free chains | proven |
 | `no-assert` | No assertion anywhere in the test (the "Unknown Test" smell) — passes silently by design of the framework | advisory |
 | `mock-echo` | Test asserts the mock does what it was just stubbed to do: `m.mockReturnValue(5); expect(m()).toBe(5)`, or calls `m()` then asserts `toHaveBeenCalled()` | proven (direct) / advisory (indirect) |
-| `duplicate-test` | Body identical to an earlier test in the *same* suite scope — same-file, same-describe only, snapshot tests excluded. Comparison is comment/formatting-insensitive but **literal-sensitive** (whitespace *inside* a string/template literal counts), so whitespace-handling tests are not merged. When the two tests' names materially diverge the finding is flagged as a likely copy-paste bug that leaves the named behaviour untested | proven |
+| `duplicate-test` | Body identical to an earlier test. **Same file + same class/describe scope → proven** (auto-deletable). **Different file or scope → advisory** (surfaced only — a shared body can behave differently under a different conftest/fixture set or `beforeEach`, so a human picks which to keep). Comparison is comment/formatting-insensitive but **literal-sensitive** (whitespace *inside* a string/template literal counts), so whitespace-handling tests are not merged. When two identical-bodied tests' names materially diverge, the finding is flagged as a likely copy-paste bug that leaves the named behaviour untested | proven / advisory |
 | `dead-assert` | Assertion after an unconditional `return`/`throw`/`raise` — unreachable | proven |
 | `swallowed-assert` | Assertion inside `try` with an empty/`pass`/console-only catch — a failure is absorbed | proven, report-only |
 | `never-asserts` | Test has assertions but ALL are dead or swallowed → the test cannot fail | proven |
@@ -31,6 +31,12 @@ by `--fix --aggressive`), or `report-only` (never auto-removed).
 A type is only a guarantee when nothing lied to the checker. The scripts
 refuse to mark `type-guaranteed` as proven when:
 
+- **the checked value is produced by an inline call** — `assert isinstance(fetch(), dict)`
+  / `expect(typeof build()).toBe(...)`. Deleting the assertion would also delete
+  that call's execution, which is real smoke coverage. Python skips these
+  entirely; TS keeps them advisory. Only assertions on an already-bound name or
+  attribute are proven-deletable, because the call that produced the value lives
+  on its own line and survives.
 - the expression's type involves `any` / `unknown` / type parameters (TS) or
   `Any` / unions (Python) — `JSON.parse`, untyped imports, untyped defs;
 - the expression contains `as` casts (except `as const`), `<T>` assertions,
@@ -51,9 +57,12 @@ refuse to mark `type-guaranteed` as proven when:
   check on its result is real API-shape regression coverage. The Python
   detector runs mypy with `--warn-return-any` over the source tree and refuses
   to flag assertions on values that flow (directly or through one assignment)
-  from a `[no-any-return]` function. The TS detector walks the callee's return
-  statements and refuses when an annotated function returns an `any`-typed
-  expression or contains a cast in a return.
+  from a `[no-any-return]` function. This laundering set is then **propagated
+  transitively**: a thin wrapper `def f() -> dict: return g()` type-checks clean
+  (mypy trusts `g`'s declared return) but re-launders `g`'s `Any`, so `f` is
+  folded in via a fixpoint over `return <call>` pass-throughs. The TS detector
+  walks the callee's return statements and refuses when an annotated function
+  returns an `any`-typed expression or contains a cast in a return.
 - Duplicate detection includes decorators in the test's identity — two
   `@pytest.mark.parametrize` tests can share a body but run different cases.
 - **Literal-sensitive duplicate key** (found by real-repo iteration on langfuse):
@@ -76,6 +85,20 @@ Known residual edge cases (accepted, documented): property getters with side
 effects can defeat `expect(a.b).toBe(a.b)` self-comparison detection; `NaN`
 makes `toBe(self)` fail rather than pass — either way the test checks nothing
 about the code under test.
+
+## What `--fix` does safely
+
+- **Never drops smoke coverage.** When *every* assertion in a test is redundant,
+  the whole test is removed only if nothing executable would remain — the body
+  is purely docstrings / `pass` / literal assignments. If the test still calls
+  code under test or runs an `import` (a rename/break would fail it), it is left
+  intact; the tool refuses to strip a test's last assertion.
+- **No dangling locals.** If deleting an assertion orphans a local
+  (`resp = Model.model_validate(raw)` used only by the removed assert), the
+  assignment is rewritten to a bare `Model.model_validate(raw)` — keeping the
+  call (real coverage) while removing the now-unused binding. Pure-literal
+  dead assignments are dropped. Orphaned *imports* are left to the project's
+  linter (`ruff --fix`), which resolves cross-file usage correctly.
 
 ## False-positive guards (learned from real repos)
 

@@ -474,7 +474,18 @@ function classifyExpect(exp, constMap = new Map()) {
   if (!typesAvailable) return null;
 
   // ---- type-guaranteed family
-  const proven = (reason) => ({ category: 'type-guaranteed', level: 'proven', deletable: 'safe', reason });
+  // If the checked value is produced by an inline call (`expect(fetch()).toBeDefined()`,
+  // `expect(typeof build()).toBe(...)`), deleting the assertion would also delete
+  // that call's execution — real smoke coverage. Such findings stay advisory
+  // rather than auto-deletable; a value bound to a variable beforehand is unaffected.
+  let subjectHasCall = false;
+  if (subject) walk(subject, (n) => {
+    if (ts.isCallExpression(n) || ts.isNewExpression(n)) subjectHasCall = true;
+  });
+  const proven = (reason) => subjectHasCall
+    ? { category: 'type-guaranteed', level: 'advisory', deletable: 'report-only',
+        reason: reason + ' — subject inlines a call, kept advisory to preserve smoke coverage' }
+    : { category: 'type-guaranteed', level: 'proven', deletable: 'safe', reason };
   const advisory = (reason) => ({ category: 'type-guaranteed', level: 'advisory', deletable: 'aggressive', reason });
 
   // negated typeof: expect(typeof x).not.toBe('undefined') on a type that excludes undefined
@@ -972,6 +983,7 @@ for (const file of testFiles) {
 // duplicate-test pass (same describe scope, ignore snapshot tests)
 {
   const seen = new Map();
+  const seenGlobal = new Map();
   for (const rec of testRecords) {
     const bodyText = ts.isBlock(rec.fn.body)
       ? printer.printNode(ts.EmitHint.Unspecified, rec.fn.body, rec.sf)
@@ -994,6 +1006,26 @@ for (const file of testFiles) {
       allFindings.push(toReportFinding(rec, f));
     } else {
       seen.set(key, rec);
+    }
+
+    // cross-scope duplicate (different file or describe): surface but never
+    // auto-delete — a shared body can behave differently under different
+    // beforeEach/setup, so a human must pick which to keep.
+    const gkey = bodyKey;
+    if (seenGlobal.has(gkey)) {
+      const first = seenGlobal.get(gkey);
+      const sameScope = first.sf.fileName === rec.sf.fileName &&
+        enclosingDescribeKey(first.stmt, first.sf) === enclosingDescribeKey(rec.stmt, rec.sf);
+      if (!rec.isDuplicate && !sameScope) {
+        const where = `${first.sf.fileName.split('/').pop()}:${first.line}`;
+        const f = { category: 'duplicate-test', level: 'advisory', deletable: 'report-only',
+          reason: `body is identical to "${first.title}" (${where}) in a different suite — ` +
+            'likely redundant, but beforeEach/setup may differ, so review before removing', stmtRef: null };
+        rec.findings.push(f);
+        allFindings.push(toReportFinding(rec, f));
+      }
+    } else {
+      seenGlobal.set(gkey, rec);
     }
   }
 }
@@ -1023,11 +1055,29 @@ for (const rec of testRecords) {
   const stmtFindings = rec.findings.filter(f => f.stmtRef);
   const deadStmts = stmtFindings.filter(f => f.category === 'dead-assert');
   const liveDeletable = stmtFindings.filter(f => f.category !== 'dead-assert').filter(wants);
-  const wholeTest =
+  const allRedundant =
     rec.expectCount > 0 &&
     liveDeletable.length === rec.expectCount &&
     rec.nonRedundantExpects === 0 &&
     rec.nestedAssertions === 0;
+
+  // Even when every assertion is redundant, the test may still EXERCISE code
+  // under test outside the assertions (a call that could throw = smoke coverage).
+  // Only remove the whole test if nothing executable remains once the redundant
+  // expect statements are gone; otherwise leave it intact.
+  let remainingCall = false;
+  if (allRedundant && ts.isBlock(rec.fn.body)) {
+    const del = new Set(liveDeletable.map(f => f.stmtRef));
+    for (const st of rec.fn.body.statements) {
+      if (del.has(st)) continue;
+      if (ts.isExpressionStatement(st) && ts.isStringLiteral(st.expression)) continue;
+      walk(st, n => {
+        if (ts.isCallExpression(n) || ts.isNewExpression(n)) remainingCall = true;
+      });
+      if (remainingCall) break;
+    }
+  }
+  const wholeTest = allRedundant && !remainingCall;
 
   if (wholeTest) removableTests.push(rec);
   else {

@@ -522,6 +522,12 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 return None
             if file_has_cast:
                 return None  # cast()/type:ignore in file — types may lie, stay silent
+            if any(isinstance(n, ast.Call) for n in ast.walk(expr_node)):
+                # the checked value is produced by an inline call (e.g.
+                # `assert isinstance(fetch(), dict)`); deleting the assertion would
+                # also delete that call's execution — real smoke coverage. Only
+                # flag assertions whose subject is already-bound (a name/attr).
+                return None
             p = Probe(path, a.lineno, indent, expr_src, kind, extra)
             p.finding_slot = (fn.name, a)
             probes.append(p)
@@ -636,6 +642,57 @@ def enclosing_function_names(sites: set[tuple[str, int]]) -> set[str]:
     return names
 
 
+def propagate_laundering(root: str, seed: set[str]) -> set[str]:
+    """Grow the Any-laundering function set transitively.
+
+    mypy flags `def g() -> dict: return api_get()` (api_get -> Any) as
+    [no-any-return], so `g` is in the seed. But a thin wrapper
+    `def f() -> dict: return g()` type-checks clean — mypy trusts g's *declared*
+    dict return — so f slips past a direct name check even though at runtime f
+    yields g's unvalidated Any. Any `return <call to a laundering fn>` (optionally
+    awaited) re-launders that Any, so f must join the set too. We fixpoint over
+    every function whose sole act on some return path is to pass through a
+    laundering call. Type-constructing returns (`return Model(**g())`,
+    `return g().model_dump()`) are NOT pass-throughs and are left out.
+    """
+    # name -> set of callee names appearing as a *direct* `return <call>`
+    returns_calls: dict[str, set[str]] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if not fn.endswith(".py") or fn.startswith("_cap_obv_shadow_"):
+                continue
+            try:
+                tree = ast.parse(open(os.path.join(dirpath, fn), encoding="utf-8").read())
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for r in ast.walk(node):
+                    if isinstance(r, ast.Return) and r.value is not None:
+                        v = r.value
+                        if isinstance(v, ast.Await):
+                            v = v.value
+                        # only a bare pass-through `return callee(...)` counts;
+                        # `return callee(...).x` / `return [.. callee() ..]` apply
+                        # a transform and are treated as enforcing the type
+                        if isinstance(v, ast.Call):
+                            cn = call_name(v)
+                            if cn:
+                                returns_calls.setdefault(node.name, set()).add(cn)
+
+    laundering = set(seed)
+    changed = True
+    while changed:
+        changed = False
+        for fname, callees in returns_calls.items():
+            if fname not in laundering and (callees & laundering):
+                laundering.add(fname)
+                changed = True
+    return laundering
+
+
 def run_mypy_probes(probes: list[Probe], root: str,
                     mypy_cmd: list[str] | None) -> tuple[str | None, set[str]]:
     """Insert reveal_type() shadow files, run mypy once, map notes back.
@@ -728,7 +785,8 @@ def run_mypy_probes(probes: list[Probe], root: str,
                 if not os.path.exists(fpath):
                     fpath = os.path.abspath(m.group(1))
                 any_return_sites.add((fpath, int(m.group(2))))
-        return None, enclosing_function_names(any_return_sites)
+        seed = enclosing_function_names(any_return_sites)
+        return None, propagate_laundering(root, seed)
     finally:
         for s in shadow_files:
             try:
@@ -816,7 +874,8 @@ def _names_diverge(a: str, b: str) -> bool:
 
 
 def mark_duplicates(records: list[TestRecord]):
-    seen = {}
+    seen = {}          # same file + same class scope → proven, auto-deletable
+    seen_global = {}   # anywhere (cross-file / cross-class) → advisory only
     for rec in records:
         try:
             body_dump = ast.dump(ast.Module(body=rec.node.body, type_ignores=[]))
@@ -841,11 +900,73 @@ def mark_duplicates(records: list[TestRecord]):
         else:
             seen[key] = rec
 
+        # cross-scope duplicate (different file or class): surface but never
+        # auto-delete — a shared body can behave differently under a different
+        # conftest/fixture set or class setUp, so a human must pick which to keep.
+        gkey = (deco_dump, body_dump)
+        if gkey in seen_global:
+            first = seen_global[gkey]
+            if not rec.is_duplicate and (first.file, first.scope_key) != (rec.file, rec.scope_key):
+                where = f"{os.path.basename(first.file)}:{first.node.lineno}"
+                rec.findings.append(Finding(
+                    rec.file, rec.node.lineno, rec.name, "duplicate-test", "advisory", "report-only",
+                    f'body is identical to "{first.name}" ({where}) in a different scope — '
+                    "likely redundant, but conftest/fixtures may differ, so review before removing"))
+        else:
+            seen_global[gkey] = rec
+
 
 # ------------------------------------------------------------------ fix
+def _dangling_edits(rec, removed_nodes, lines):
+    """After removing some assertions, an assignment whose bound name is now
+    referenced nowhere becomes a dead local (a lint error, e.g. ruff F841).
+    Its RHS may still be real coverage — `response = Model.model_validate(raw)`
+    validates and raises — so we convert `v = <expr with call>` to a bare
+    `<expr>` (keeping the call) and drop `v = <pure literal>` outright. Returns
+    (start, end, replacement_or_None) edits; None means delete the line span."""
+    removed_ids = {id(n) for n in removed_nodes}
+    used_in_removed, used_elsewhere = set(), set()
+    for stmt in rec.node.body:
+        names = {n.id for n in ast.walk(stmt)
+                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        (used_in_removed if id(stmt) in removed_ids else used_elsewhere).update(names)
+    newly_unused = used_in_removed - used_elsewhere
+    edits = []
+    for stmt in rec.node.body:
+        if id(stmt) in removed_ids:
+            continue
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
+                and isinstance(stmt.targets[0], ast.Name):
+            v = stmt.targets[0].id
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            v = stmt.target.id
+        else:
+            continue
+        if v not in newly_unused:
+            continue
+        rhs = stmt.value
+        indent = " " * (len(lines[stmt.lineno - 1]) - len(lines[stmt.lineno - 1].lstrip()))
+        if rhs is not None and any(isinstance(n, ast.Call) for n in ast.walk(rhs)):
+            try:
+                text = indent + " ".join(ast.unparse(rhs).split()) + "\n"
+            except Exception:
+                continue
+            edits.append((stmt.lineno, stmt.end_lineno, text))
+        else:
+            edits.append((stmt.lineno, stmt.end_lineno, None))
+    return edits
+
+
 def apply_fix(records: list[TestRecord], aggressive: bool, root: str):
-    removals_by_file: dict[str, list[tuple[int, int]]] = {}
+    # edits: (start, end, replacement) — replacement None means delete the span
+    edits_by_file: dict[str, list[tuple[int, int, str | None]]] = {}
+    file_lines: dict[str, list[str]] = {}
     tests_removed, asserts_removed = 0, 0
+
+    def lines_of(f):
+        if f not in file_lines:
+            file_lines[f] = open(f, encoding="utf-8").read().splitlines(keepends=True)
+        return file_lines[f]
 
     def want(f: Finding) -> bool:
         return f.deletable == "safe" or (aggressive and f.deletable == "aggressive")
@@ -863,14 +984,36 @@ def apply_fix(records: list[TestRecord], aggressive: bool, root: str):
                          and f.category != "dead-assert"]
             if (rec.live_assert_count > 0 and len(deletable) == rec.live_assert_count
                     and rec.nonredundant == 0 and rec.conditional == 0 and rec.helper_asserts == 0):
-                whole = True
+                # Every assertion is redundant — but the test may still EXERCISE
+                # code under test and thereby carry real smoke coverage: a call
+                # that could raise, or an `import` that could fail if a symbol was
+                # renamed/removed. Deleting the whole test would silently drop
+                # that. Only remove the test when EVERYTHING that would remain is
+                # trivial (docstring / pass / literal assignment). Anything else —
+                # a call, an import, a loop, a with-block — means keep it, and the
+                # ok_partial guard below then refuses to strip its last assertion.
+                del_nodes = {id(f.node) for f in deletable}
 
-        spans = removals_by_file.setdefault(rec.file, [])
+                def _trivial(stmt):
+                    if isinstance(stmt, ast.Pass):
+                        return True
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                        return True  # docstring / bare literal
+                    if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                        val = stmt.value
+                        return val is None or not any(
+                            isinstance(n, ast.Call) for n in ast.walk(val))
+                    return False
+
+                whole = all(id(s) in del_nodes or _trivial(s) for s in rec.node.body)
+
+        spans = edits_by_file.setdefault(rec.file, [])
         if whole:
             start = min([d.lineno for d in rec.node.decorator_list] + [rec.node.lineno])
-            spans.append((start, rec.node.end_lineno))
+            spans.append((start, rec.node.end_lineno, None))
             tests_removed += 1
         else:
+            removed_nodes = []
             for f in rec.findings:
                 if f.node is not None and want(f):
                     report_only_asserts = sum(1 for x in rec.findings
@@ -879,18 +1022,31 @@ def apply_fix(records: list[TestRecord], aggressive: bool, root: str):
                                   rec.nonredundant + rec.helper_asserts + rec.conditional
                                   + report_only_asserts > 0)
                     if ok_partial:
-                        spans.append((f.node.lineno, f.node.end_lineno))
+                        spans.append((f.node.lineno, f.node.end_lineno, None))
+                        removed_nodes.append(f.node)
                         asserts_removed += 1
+            # convert/remove locals that these deletions just orphaned so the
+            # fixed file stays lint-clean (no dead assignments left behind)
+            if removed_nodes:
+                spans.extend(_dangling_edits(rec, removed_nodes, lines_of(rec.file)))
 
     files_changed = 0
-    for file, spans in removals_by_file.items():
+    for file, spans in edits_by_file.items():
         if not spans:
             continue
-        lines = open(file, encoding="utf-8").read().splitlines(keepends=True)
+        lines = lines_of(file)
+        replace = {}   # 1-based start line -> replacement text
         drop = set()
-        for s, e in spans:
+        for s, e, repl in spans:
             drop.update(range(s, e + 1))
-        new = [l for i, l in enumerate(lines, 1) if i not in drop]
+            if repl is not None:
+                replace[s] = repl
+        new = []
+        for i, l in enumerate(lines, 1):
+            if i in replace:
+                new.append(replace[i])
+            elif i not in drop:
+                new.append(l)
         with open(file, "w", encoding="utf-8") as fh:
             fh.writelines(new)
         files_changed += 1
