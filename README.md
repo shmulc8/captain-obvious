@@ -105,6 +105,8 @@ already emits.
 | `local-const-echo` | `const expected = 5; expect(expected).toBe(5)` | proven |
 | `mock-echo` | stub returns 5 → assert it returns 5 | proven / advisory |
 | `dead-assert` / `swallowed-assert` / `never-asserts` | assertion after `return`, or inside `try {} catch {}` | proven |
+| `missed-fail` | a forced-fail marker (`pytest.fail()` / `throw new Error`) stuck in dead code — can never fire | proven |
+| `missed-skip` | a conditional early `return`/`skip` above the asserts — if it fires, they never run | advisory |
 | `duplicate-test` | identical body in the same suite | proven |
 | `no-assert` | no assertion anywhere — a **smoke test** (legit by design, per ICSE '19), surfaced not deleted | advisory |
 | `conditional-assert` | assertion gated behind `if` — rotten green (ICSE '19) | advisory |
