@@ -119,6 +119,44 @@ const isBadType = (t) =>
   t.isIntersection?.() || parts(t).some(p => p.isIntersection?.() || (p.flags & BAD_MASK));
 const norm = (s) => s.replace(/\s+/g, '');
 
+// Literal-preserving canonical key: tokenize and keep each token's raw text, so
+// whitespace *inside* string/template/regex literals is significant while
+// indentation, line breaks, and comments between tokens are not. Using norm()
+// (a blanket whitespace strip) for equality is unsafe — it collapses tests that
+// differ only by literal whitespace (e.g. "{{ name }}" vs "{{name}}") into one,
+// which at proven level would delete a genuinely distinct test.
+function canon(text) {
+  const sc = ts.createScanner(ts.ScriptTarget.Latest, /*skipTrivia*/ true,
+    ts.LanguageVariant.Standard, text);
+  const toks = [];
+  let k;
+  try {
+    while ((k = sc.scan()) !== ts.SyntaxKind.EndOfFileToken) {
+      if (k === ts.SyntaxKind.Unknown) return norm(text); // lexer confused → fall back
+      toks.push(sc.getTokenText());
+    }
+  } catch {
+    return norm(text);
+  }
+  return toks.join('');
+}
+
+// Two identical-bodied tests with materially different titles usually mean a
+// copy-paste bug: the second test's *named* behaviour is silently untested.
+// Deleting is still coverage-safe, but the report should flag it loudly.
+function nameTokens(title) {
+  const words = (title || '').match(/[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])/g) || [];
+  return new Set(words.map(w => w.toLowerCase()).filter(w => w && !/^\d+$/.test(w)));
+}
+function namesDiverge(a, b) {
+  const ta = nameTokens(a), tb = nameTokens(b);
+  if (!ta.size || !tb.size) return false;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  const union = ta.size + tb.size - inter;
+  return inter / union < 0.6;
+}
+
 function walk(node, fn) {
   fn(node);
   ts.forEachChild(node, c => walk(c, fn));
@@ -398,7 +436,7 @@ function classifyExpect(exp, constMap = new Map()) {
   // ---- self-compare-call: expect(f(a)).toEqual(f(a)) — equal by construction.
   // Skipped when the test is deliberately checking determinism (its name says so).
   if (!negated && EQ_MATCHERS.has(matcher) && arg0 && !isSimpleChain(subject) &&
-      norm(subject.getText()) === norm(arg0.getText()) &&
+      canon(subject.getText()) === canon(arg0.getText()) &&
       !/stable|determin|consistent|idempotent|same|pure/i.test(exp.testTitle ?? '')) {
     return { category: 'self-compare-call', level: 'advisory', deletable: 'report-only',
              reason: `compares ${subject.getText().slice(0, 60)} to an identical expression — equal by construction unless nondeterministic` };
@@ -420,7 +458,7 @@ function classifyExpect(exp, constMap = new Map()) {
       }
       return null;
     }
-    if (isSimpleChain(subject) && norm(subject.getText()) === norm(arg0.getText())) {
+    if (isSimpleChain(subject) && canon(subject.getText()) === canon(arg0.getText())) {
       return { category: 'constant-assert', level: 'proven', deletable: 'safe',
                reason: `compares ${subject.getText()} to itself` };
     }
@@ -612,13 +650,13 @@ function detectMockEcho(statements, expectStmts) {
         /^mock(Return|Resolved)Value(Once)?$/.test(e.expression.name.text) &&
         e.arguments.length === 1) {
       const root = rootIdentifier(e.expression.expression);
-      if (root) stubs.set(root, norm(e.arguments[0].getText()));
+      if (root) stubs.set(root, canon(e.arguments[0].getText()));
       continue;
     }
 
     // direct call of a bare identifier: M(...)
     if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
-      directCalls.set(e.expression.text, norm(e.arguments.map(a => a.getText()).join(',')));
+      directCalls.set(e.expression.text, canon(e.arguments.map(a => a.getText()).join(',')));
       continue;
     }
 
@@ -633,7 +671,7 @@ function detectMockEcho(statements, expectStmts) {
       const root = rootIdentifier(subject);
       if (root && directCalls.has(root)) {
         let ok = matcher !== 'toHaveBeenCalledWith' ||
-                 norm(args.map(a => a.getText()).join(',')) === directCalls.get(root);
+                 canon(args.map(a => a.getText()).join(',')) === directCalls.get(root);
         if (matcher === 'toHaveBeenCalledTimes') ok = args[0]?.getText() === '1';
         if (ok) {
           findings.set(stmt, { category: 'mock-echo', level: 'proven', deletable: 'safe',
@@ -650,7 +688,7 @@ function detectMockEcho(statements, expectStmts) {
       if (ts.isAwaitExpression(s)) s = s.expression;
       if (ts.isCallExpression(s) && ts.isIdentifier(s.expression)) root = s.expression.text;
       else if (ts.isIdentifier(s) && bindings.get(s.text)) root = bindings.get(s.text).mock;
-      if (root && stubs.has(root) && stubs.get(root) === norm(args[0].getText())) {
+      if (root && stubs.has(root) && stubs.get(root) === canon(args[0].getText())) {
         findings.set(stmt, { category: 'mock-echo', level: 'proven', deletable: 'safe',
           reason: `asserts ${root}() returns the exact value it was stubbed with — tests the mocking library` });
       }
@@ -939,12 +977,18 @@ for (const file of testFiles) {
       ? printer.printNode(ts.EmitHint.Unspecified, rec.fn.body, rec.sf)
       : rec.fn.body.getText(rec.sf);
     if (/MatchSnapshot|MatchInlineSnapshot/.test(bodyText)) continue;
-    if (norm(bodyText).length < 8) continue;
-    const key = enclosingDescribeKey(rec.stmt, rec.sf) + '::' + norm(bodyText);
+    const bodyKey = canon(bodyText);
+    if (bodyKey.length < 8) continue;
+    const key = enclosingDescribeKey(rec.stmt, rec.sf) + '::' + bodyKey;
     if (seen.has(key)) {
       const first = seen.get(key);
+      let reason = `body is identical to "${first.title}" (line ${first.line}) in the same suite`;
+      if (namesDiverge(rec.title, first.title)) {
+        reason += " — names differ, so this is likely a copy-paste that leaves this test's " +
+          'named behaviour untested; deleting is coverage-safe but consider fixing the body instead';
+      }
       const f = { category: 'duplicate-test', level: 'proven', deletable: 'safe',
-        reason: `body is identical to "${first.title}" (line ${first.line}) in the same suite`, stmtRef: null };
+        reason, stmtRef: null };
       rec.findings.push(f);
       rec.isDuplicate = true;
       allFindings.push(toReportFinding(rec, f));

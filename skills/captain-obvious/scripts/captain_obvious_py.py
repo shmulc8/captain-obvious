@@ -316,24 +316,51 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 "every assertion is unreachable or swallowed — the test can never fail"))
             return
 
-        # -- conditional (rotten green): live asserts gated behind if/loop
+        # -- conditional (rotten green): a live assert that may never execute
+        # because a guard is never true. To keep this signal clean we flag ONLY
+        # the classic vacuous-pass shape and deliberately exclude two common,
+        # legitimate patterns that otherwise drown it:
+        #   * loop-nested asserts (`for x in items: if ...: assert`) — ordinary
+        #     data-driven dispatch, not a rotten green test;
+        #   * asserts guarded by a parametrized argument (`if mode: ... else: ...`
+        #     where `mode` is a @pytest.mark.parametrize / fixture parameter) —
+        #     every branch is exercised across the parametrization.
+        param_names: set[str] = set()
+        _a = fn.args
+        for grp in (_a.posonlyargs, _a.args, _a.kwonlyargs):
+            for arg in grp:
+                param_names.add(arg.arg)
+        if _a.vararg:
+            param_names.add(_a.vararg.arg)
+        if _a.kwarg:
+            param_names.add(_a.kwarg.arg)
+
+        loop_gated_asserts: set[int] = set()
+        for d in walk_no_nested_funcs(fn):
+            if isinstance(d, (ast.For, ast.AsyncFor, ast.While)):
+                for x in ast.walk(d):
+                    if isinstance(x, ast.Assert):
+                        loop_gated_asserts.add(id(x))
+
         plain_live_asserts = []
         for a in live:
             gated = False
             ts = top_stmt_of(a)
-            if ts is not None and ts is not a:
-                # if-gated only: loop-gated asserts (for item in results: assert ...)
-                # are ordinary pytest style and flagging them buries the signal
+            if ts is not None and ts is not a and id(a) not in loop_gated_asserts:
                 for d in [ts, *walk_no_nested_funcs(ts)]:
-                    if isinstance(d, ast.If):
-                        if any(x is a for x in ast.walk(d)):
-                            gated = True
+                    if isinstance(d, ast.If) and any(x is a for x in ast.walk(d)):
+                        # skip guards keyed on a test parameter — parametrization
+                        # runs every branch, so the assert is not really optional
+                        cond_names = {n.id for n in ast.walk(d.test) if isinstance(n, ast.Name)}
+                        if cond_names & param_names:
                             break
+                        gated = True
+                        break
             if gated:
                 rec.conditional += 1
                 rec.findings.append(Finding(
                     path, a.lineno, fn.name, "conditional-assert", "advisory", "report-only",
-                    f"assertion at line {a.lineno} is gated behind a conditional/loop — it may never execute (rotten green)"))
+                    f"assertion at line {a.lineno} is gated behind an if — it may never execute (rotten green)"))
             elif isinstance(a, ast.Assert) and ts is a:
                 plain_live_asserts.append(a)
             else:
@@ -359,9 +386,15 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                         bare_mocks.add(t.id)
 
         # -- literal locals for local-const-echo: x = 5 (and never rebound)
+        # Walk the FULL subtree (including nested functions): a closure can mutate
+        # a captured variable via `nonlocal`/`global` (e.g. a call-counter
+        # `count = 0; def cb(): nonlocal count; count += 1; ... assert count == 0`),
+        # in which case `assert count == <literal>` is real behavioural coverage,
+        # not a self-referential arrangement. Counting only top-level assignments
+        # would wrongly treat such a counter as an immutable literal.
         assign_counts: dict[str, int] = {}
         const_map: dict[str, object] = {}
-        for d in walk_no_nested_funcs(fn):
+        for d in ast.walk(fn):
             targets = []
             if isinstance(d, ast.Assign):
                 targets = d.targets
@@ -369,6 +402,15 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 targets = [d.target]
             elif isinstance(d, (ast.For, ast.AsyncFor)):
                 targets = [d.target]
+            elif isinstance(d, ast.NamedExpr):
+                targets = [d.target]
+            elif isinstance(d, (ast.Global, ast.Nonlocal)):
+                # a name rebindable from a nested/other scope is never a fixed literal
+                for nm in d.names:
+                    assign_counts[nm] = assign_counts.get(nm, 0) + 2
+                continue
+            elif isinstance(d, (ast.With, ast.AsyncWith)):
+                targets = [it.optional_vars for it in d.items if it.optional_vars is not None]
             for t in targets:
                 for n in ast.walk(t):
                     if isinstance(n, ast.Name):
@@ -754,6 +796,25 @@ def resolve_probes(probes: list[Probe], records: list[TestRecord], root: str,
 
 
 # ------------------------------------------------------------------ duplicates
+def _name_tokens(name: str) -> set[str]:
+    # split on underscores/camelCase, drop the leading `test` marker and pure digits
+    words = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)
+    return {w.lower() for w in words if w.lower() not in ("test",) and not w.isdigit()}
+
+
+def _names_diverge(a: str, b: str) -> bool:
+    # True when two identical-bodied tests carry materially different names — a
+    # strong signal of a copy-paste bug where the second test's *named* behaviour
+    # is silently untested (e.g. `..._none_type_returns_unchanged` whose body is a
+    # verbatim copy of `..._request_dict`). Still coverage-safe to delete, but the
+    # report should say so loudly rather than call it harmless redundancy.
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return False
+    overlap = len(ta & tb) / len(ta | tb)
+    return overlap < 0.6
+
+
 def mark_duplicates(records: list[TestRecord]):
     seen = {}
     for rec in records:
@@ -770,9 +831,13 @@ def mark_duplicates(records: list[TestRecord]):
         if key in seen:
             first = seen[key]
             rec.is_duplicate = True
+            reason = f'body is identical to "{first.name}" (line {first.node.lineno}) in the same scope'
+            if _names_diverge(rec.name, first.name):
+                reason += (' — names differ, so this is likely a copy-paste that leaves '
+                           "this test's named behaviour untested; deleting is coverage-safe "
+                           'but consider fixing the body instead')
             rec.findings.append(Finding(
-                rec.file, rec.node.lineno, rec.name, "duplicate-test", "proven", "safe",
-                f'body is identical to "{first.name}" (line {first.node.lineno}) in the same scope'))
+                rec.file, rec.node.lineno, rec.name, "duplicate-test", "proven", "safe", reason))
         else:
             seen[key] = rec
 

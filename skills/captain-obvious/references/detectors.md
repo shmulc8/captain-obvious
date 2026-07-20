@@ -13,11 +13,11 @@ by `--fix --aggressive`), or `report-only` (never auto-removed).
 | `constant-assert` | Tautologies: `expect(true).toBe(true)`, `assert 1 == 1`, `expect(x).toBe(x)`, `assert x == x` on side-effect-free chains | proven |
 | `no-assert` | No assertion anywhere in the test (the "Unknown Test" smell) — passes silently by design of the framework | advisory |
 | `mock-echo` | Test asserts the mock does what it was just stubbed to do: `m.mockReturnValue(5); expect(m()).toBe(5)`, or calls `m()` then asserts `toHaveBeenCalled()` | proven (direct) / advisory (indirect) |
-| `duplicate-test` | Body identical (comments/whitespace-insensitive) to an earlier test in the *same* suite scope — same-file, same-describe only, snapshot tests excluded | proven |
+| `duplicate-test` | Body identical to an earlier test in the *same* suite scope — same-file, same-describe only, snapshot tests excluded. Comparison is comment/formatting-insensitive but **literal-sensitive** (whitespace *inside* a string/template literal counts), so whitespace-handling tests are not merged. When the two tests' names materially diverge the finding is flagged as a likely copy-paste bug that leaves the named behaviour untested | proven |
 | `dead-assert` | Assertion after an unconditional `return`/`throw`/`raise` — unreachable | proven |
 | `swallowed-assert` | Assertion inside `try` with an empty/`pass`/console-only catch — a failure is absorbed | proven, report-only |
 | `never-asserts` | Test has assertions but ALL are dead or swallowed → the test cannot fail | proven |
-| `conditional-assert` | Assertion gated behind `if` (rotten green test, ICSE '19) — may never execute (e.g. `if (process.platform === 'darwin')` in Linux-only CI). Loop-gated asserts are deliberately NOT flagged — too common as legit style | advisory, report-only |
+| `conditional-assert` | Assertion gated behind `if` (rotten green test, ICSE '19) — may never execute (e.g. `if (process.platform === 'darwin')` in Linux-only CI). Two shapes are deliberately NOT flagged, being common legit style: loop-nested asserts (`for x in items: if …: assert`), and asserts whose guard is keyed on a parametrized/fixture argument (`if mode: … else: …` — every branch runs across the parametrization) | advisory, report-only |
 | `boundary-tautology` | `expect(x.length).toBeGreaterThanOrEqual(0)` / `assert len(x) >= 0` — a length can never be negative | proven |
 | `local-const-echo` | `const expected = 5; expect(expected).toBe(5)` — the test asserts its own arrangement, code under test never involved | proven |
 | `floating-async-assert` | `expect(p).resolves/.rejects...` without `await`. Runner-dependent severity: Jest silently never evaluates it (real silent-pass bug); bun:test and modern Vitest fail the test at settle time (style/portability issue). Needs `await` added, so report-only | advisory, report-only |
@@ -56,6 +56,21 @@ refuse to mark `type-guaranteed` as proven when:
   expression or contains a cast in a return.
 - Duplicate detection includes decorators in the test's identity — two
   `@pytest.mark.parametrize` tests can share a body but run different cases.
+- **Literal-sensitive duplicate key** (found by real-repo iteration on langfuse):
+  a naive whitespace-stripped body comparison merges tests that differ only in
+  whitespace *inside* a string/template literal — exactly what a template
+  whitespace-handling suite looks like (`"{{ name }}"` vs `"{{name}}"`). The TS
+  detector builds the duplicate/echo key by tokenizing (`ts.createScanner`) and
+  keeping each token's raw text, so literal contents are significant while
+  indentation/comments are not. Python already dumps the AST, which preserves
+  string-constant values, so it is immune by construction.
+- **Closure-mutated locals** (found on mlflow): a call-counter
+  `count = 0; def cb(): nonlocal count; count += 1; …; assert count == 0`
+  is not a `local-const-echo` — the assertion is real behavioural coverage that
+  the callback did/didn't run. The Python detector counts assignments across the
+  full function subtree (not just the top level) and hard-disqualifies any name
+  declared `nonlocal`/`global` in a nested scope. The TS detector only trusts
+  `const` bindings to primitive literals, which cannot be closure-mutated.
 
 Known residual edge cases (accepted, documented): property getters with side
 effects can defeat `expect(a.b).toBe(a.b)` self-comparison detection; `NaN`
