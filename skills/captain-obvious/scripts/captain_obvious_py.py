@@ -19,7 +19,7 @@ from co_py.models import Probe, TestRecord
 from co_py.mypy_pass import run_mypy_probes, resolve_probes
 from co_py.duplicates import mark_duplicates
 from co_py.coverage import load_coverage
-from co_py.fixer import apply_fix
+from co_py.fixer import apply_fix, plan_removals
 from co_py.gitguard import fix_blocker
 
 
@@ -103,6 +103,7 @@ def main():
     for f in findings:
         summary.setdefault(f.category, {"proven": 0, "advisory": 0})[f.level] += 1
 
+    _, plan = plan_removals(records, root)
     fixed = apply_fix(records, root) if args.fix else None
 
     report = {
@@ -116,6 +117,7 @@ def main():
         "coverage": ({"file": args.coverage, "conditionalAssertsPromoted": cov_promoted,
                       "conditionalAssertsSuppressed": cov_suppressed} if cov is not None
                      else ({"file": args.coverage, "error": cov_note} if args.coverage else None)),
+        "plan": plan,
         "fixed": fixed,
     }
     if args.json:
@@ -128,6 +130,9 @@ def main():
     print()
     for cat, c in summary.items():
         print(f"  {cat:<20} proven: {c['proven']}  advisory: {c['advisory']}")
+    if plan["testsToRemove"] or plan["assertionsToRemove"]:
+        print(f"\n  tests fully removable: {len(plan['testsToRemove'])}")
+        print(f"  individual assertions removable: {plan['assertionsToRemove']}")
     if cov is not None:
         print(f"  coverage: {cov_promoted} conditional-assert(s) confirmed rotten, "
               f"{cov_suppressed} confirmed reached (dropped)")
