@@ -16,6 +16,7 @@ import { isTestBlock, analyzeTest, toReportFinding } from './co_ts/analyzer.mjs'
 import { loadCoverage } from './co_ts/coverage.mjs';
 import { markDuplicates } from './co_ts/duplicates.mjs';
 import { decideRemovals } from './co_ts/fixer.mjs';
+import { fixBlocker } from './co_ts/gitguard.mjs';
 
 // ---------------------------------------------------------------- args
 const argv = process.argv.slice(2);
@@ -25,9 +26,22 @@ const doFix = argv.includes('--fix');
 const jsonOut = argVal('--json');
 const coverageArg = argVal('--coverage');
 
+const force = argv.includes('--force');
+
 const projectPath = path.resolve(projectArg);
 const isFile = fs.existsSync(projectPath) && fs.statSync(projectPath).isFile();
 const projectDir = isFile ? path.dirname(projectPath) : projectPath;
+
+if (doFix && !force) {
+  const blocker = fixBlocker(projectDir);
+  if (blocker) {
+    console.error(
+      `captain-obvious: refusing to --fix — ${blocker}.\n` +
+      '  --fix rewrites test files in place with no backup. Commit or stash\n' +
+      '  first so `git checkout -- <files>` can undo it, or pass --force.');
+    process.exit(2);
+  }
+}
 
 // ------------------------------------------------- load project's TypeScript
 let ts;

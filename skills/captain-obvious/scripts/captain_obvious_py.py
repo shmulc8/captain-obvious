@@ -20,6 +20,7 @@ from co_py.mypy_pass import run_mypy_probes, resolve_probes
 from co_py.duplicates import mark_duplicates
 from co_py.coverage import load_coverage
 from co_py.fixer import apply_fix
+from co_py.gitguard import fix_blocker
 
 
 def main():
@@ -31,9 +32,20 @@ def main():
     ap.add_argument("--no-types", action="store_true", help="skip the mypy pass")
     ap.add_argument("--coverage", help="coverage file (coverage.py json / lcov / istanbul json): "
                                        "confirm conditional-assert findings against real line coverage")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --fix on a dirty or non-git tree (no undo path)")
     args = ap.parse_args()
 
     root = os.path.abspath(args.path)
+
+    if args.fix and not args.force:
+        blocker = fix_blocker(root)
+        if blocker:
+            print(f"captain-obvious: refusing to --fix — {blocker}.\n"
+                  "  --fix rewrites test files in place with no backup. Commit or stash\n"
+                  "  first so `git checkout -- <files>` can undo it, or pass --force.",
+                  file=sys.stderr)
+            return 2
     files = find_test_files(root)
     if not files:
         print(f"captain-obvious: no test files (test_*.py / *_test.py) under {root}")
