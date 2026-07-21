@@ -129,6 +129,13 @@ records — c8/nyc/jest/`coverage lcov` all emit it), **istanbul**
 (type-guaranteed, tautology, etc.) is untouched by coverage — only the
 execution-dependent `conditional-assert` category is refined.
 
+**Coverage must include the test files themselves.** Findings are keyed by
+test-file lines, so a coverage config that only measures `src/`
+(`--source=src`, `collectCoverageFrom: ['src/**']`) leaves every lookup
+empty and the mode confirms nothing. Both scanners emit a
+`coverage.warning` when a conditional-assert's test file is absent from
+the coverage map — rerun coverage over the whole repo to make it bite.
+
 ## False-positive guards (learned from real repos)
 
 - **Custom assertion helpers**: any called function matching

@@ -102,10 +102,13 @@ markDuplicates(ts, printer, testRecords, allFindings, projectDir);
 // ------------------------------------------------------------ coverage confirm
 const coverage = coverageArg ? loadCoverage(coverageArg, projectDir) : null;
 let coveragePromoted = 0, coverageSuppressed = 0;
+let coverageWarning = null;
 if (coverage) {
   const kept = [];
+  const inertFiles = new Set();
   for (const f of allFindings) {
     if (f.category === 'conditional-assert') {
+      if (!coverage.hasFile(f.file)) inertFiles.add(f.file);
       const hits = coverage.hits(f.file, f.line);
       if (hits === 0) {
         f.level = 'proven';
@@ -119,6 +122,13 @@ if (coverage) {
     kept.push(f);
   }
   allFindings.splice(0, allFindings.length, ...kept);
+  if (inertFiles.size) {
+    // coverage configs usually collect only src/ — then test-file lines are
+    // absent and this whole mode silently confirms nothing
+    coverageWarning = `coverage data has no lines for ${inertFiles.size} test file(s) ` +
+      `(${[...inertFiles].sort().slice(0, 3).join(', ')}...) — coverage mode is inert for them; ` +
+      'include test files in coverage collection (e.g. collectCoverageFrom over the whole repo, not just src/)';
+  }
 }
 
 // ------------------------------------------------------------ decide removals & plan
@@ -139,7 +149,7 @@ const report = {
   findings: allFindings,
   summary,
   coverage: coverage
-    ? { file: coverageArg, conditionalAssertsPromoted: coveragePromoted, conditionalAssertsSuppressed: coverageSuppressed }
+    ? { file: coverageArg, conditionalAssertsPromoted: coveragePromoted, conditionalAssertsSuppressed: coverageSuppressed, warning: coverageWarning }
     : (coverageArg ? { file: coverageArg, error: 'could not parse coverage (expected lcov / istanbul json / coverage.py json)' } : null),
   plan: null,
   fixed: null,
@@ -164,6 +174,7 @@ if (report.plan) {
 }
 if (coverage) {
   console.log(`  coverage: ${coveragePromoted} conditional-assert(s) confirmed rotten, ${coverageSuppressed} confirmed reached (dropped)`);
+  if (coverageWarning) console.log(`  coverage warning: ${coverageWarning}`);
 } else if (coverageArg) {
   console.log('  coverage: could not parse the coverage file (expected lcov / istanbul json / coverage.py json)');
 }

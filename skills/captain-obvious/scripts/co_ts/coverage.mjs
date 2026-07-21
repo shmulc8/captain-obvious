@@ -49,5 +49,8 @@ export function loadCoverage(file, projectDir) {
       if (!m) return undefined;
       return m.has(line) ? m.get(line) : undefined;
     },
+    hasFile(relFile) {
+      return map.has(String(relFile).split(path.sep).join('/'));
+    },
   };
 }

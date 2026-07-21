@@ -80,13 +80,18 @@ def main():
     cov = load_coverage(args.coverage, root) if args.coverage else None
     cov_promoted, cov_suppressed = 0, 0
     cov_note = None
+    cov_warn = None
     if args.coverage and cov is None:
         cov_note = "could not parse coverage (expected coverage.py json / lcov / istanbul json)"
     elif cov is not None:
+        covered_files = {f for f, _ in cov}
+        inert_files: set[str] = set()
         kept = []
         for f in findings:
             if f.category == "conditional-assert":
                 rel = os.path.relpath(f.file, root).replace(os.sep, "/")
+                if rel not in covered_files:
+                    inert_files.add(rel)
                 hits = cov.get((rel, f.line))
                 if hits == 0:
                     f.level = "proven"
@@ -98,6 +103,13 @@ def main():
                     continue  # demonstrably executes — not rotten, drop it
             kept.append(f)
         findings = kept
+        if inert_files:
+            # coverage configs usually measure only src/ — then test-file lines
+            # are absent and this whole mode silently confirms nothing
+            cov_warn = (f"coverage data has no lines for {len(inert_files)} test file(s) "
+                        f"({', '.join(sorted(inert_files)[:3])}...) — coverage mode is inert "
+                        "for them; include test files in coverage collection "
+                        "(e.g. run coverage over the whole repo, not just src/)")
 
     summary: dict[str, dict[str, int]] = {}
     for f in findings:
@@ -114,7 +126,8 @@ def main():
         "findings": [f.to_dict(root) for f in findings],
         "summary": summary,
         "coverage": ({"file": args.coverage, "conditionalAssertsPromoted": cov_promoted,
-                      "conditionalAssertsSuppressed": cov_suppressed} if cov is not None
+                      "conditionalAssertsSuppressed": cov_suppressed,
+                      "warning": cov_warn} if cov is not None
                      else ({"file": args.coverage, "error": cov_note} if args.coverage else None)),
         "fixed": fixed,
     }
@@ -131,6 +144,8 @@ def main():
     if cov is not None:
         print(f"  coverage: {cov_promoted} conditional-assert(s) confirmed rotten, "
               f"{cov_suppressed} confirmed reached (dropped)")
+        if cov_warn:
+            print(f"  coverage warning: {cov_warn}")
     elif cov_note:
         print(f"  coverage: {cov_note}")
     if findings:
