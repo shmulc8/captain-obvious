@@ -8,7 +8,7 @@ import sys
 
 from .models import Probe, TestRecord, Finding
 from .ast_utils import walk_no_nested_funcs, call_name
-from .discovery import SKIP_DIRS
+from .discovery import SKIP_DIRS, SHADOW_PREFIX
 
 REVEAL_RE = re.compile(r'^(.*?):(\d+):(?:\d+:)?\s*note: Revealed type is "(.*)"\s*$')
 ANY_RETURN_RE = re.compile(r'^(.*?):(\d+):(?:\d+:)?\s*(?:error|warning):.*\[no-any-return\]\s*$')
@@ -92,7 +92,7 @@ def propagate_laundering(root: str, seed: set[str]) -> set[str]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
         for fn in filenames:
-            if not fn.endswith(".py") or fn.startswith("_cap_obv_shadow_"):
+            if not fn.endswith(".py") or fn.startswith(SHADOW_PREFIX):
                 continue
             try:
                 tree = ast.parse(open(os.path.join(dirpath, fn), encoding="utf-8").read())
@@ -148,7 +148,7 @@ def run_mypy_probes(probes: list[Probe], root: str,
                 line_map[len(out_lines)] = p
             out_lines.extend(src_lines[li:])
             shadow = os.path.join(os.path.dirname(file),
-                                  "_cap_obv_shadow_" + os.path.basename(file))
+                                  SHADOW_PREFIX + os.path.basename(file))
             with open(shadow, "w", encoding="utf-8") as f:
                 f.write("\n".join(out_lines) + "\n")
             shadow_files.append(shadow)
@@ -175,6 +175,7 @@ def run_mypy_probes(probes: list[Probe], root: str,
                     src_targets.append(d)
 
         proc = None
+        usable = False
         for cmd in cmds:
             try:
                 proc = subprocess.run(
@@ -185,12 +186,21 @@ def run_mypy_probes(probes: list[Probe], root: str,
                            "--show-column-numbers"] + shadow_files + src_targets,
                     cwd=root, capture_output=True, text=True, timeout=600)
                 if "Revealed type" in proc.stdout or proc.returncode in (0, 1):
+                    usable = True
                     break
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 proc = None
                 continue
         if proc is None:
             return ("mypy not runnable — type-guaranteed checks skipped (install mypy or pass --mypy)", set())
+        if not usable:
+            # mypy ran but exited >=2 (fatal / bad config / unreadable source).
+            # Without this branch every probe keeps revealed=None, resolve_probes
+            # quietly reclassifies them as nonredundant, and the whole
+            # type-guaranteed category vanishes with no user-facing signal.
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            first = detail[0][:200] if detail else f"exit {proc.returncode}"
+            return (f"mypy failed ({first}) — type-guaranteed checks skipped", set())
 
         any_return_sites: set[tuple[str, int]] = set()
         for line in proc.stdout.splitlines():
