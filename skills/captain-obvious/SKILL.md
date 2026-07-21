@@ -33,6 +33,13 @@ reaching for `--force` — `--force` removes the only undo path there is
 (`git checkout -- <files>`), so use it only when the user has explicitly
 accepted that.
 
+Note: when installed as a plugin, a write-time PreToolUse hook may also be
+active — if a test-file Write/Edit is denied with a "captain-obvious:"
+reason during cleanup rewrites, fix the flagged assertions instead of
+re-trying the same content (see `references/prevention.md`). Both scanners
+also support `--file <path> [--stdin]` for a syntactic-only single-file
+scan (JSON to stdout; no mypy/tsc, no side effects).
+
 ### 3. Scan (report-only)
 
 ```bash
