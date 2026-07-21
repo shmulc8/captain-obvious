@@ -1,6 +1,6 @@
 ---
 name: captain-obvious
-description: Finds and deletes "Captain Obvious" tests — tests that can never fail or check nothing. It catches assertions the type checker already guarantees (typeof/isinstance/toBeDefined on typed values), assertion-free tests, tautologies (expect(true).toBe(true), assert x == x, len >= 0), arrange-assert echoes (const x = 5; expect(x).toBe(5)), mock-echo tests, unawaited async assertions, dead/swallowed/conditional assertions, overly-broad pytest.raises(Exception), and duplicate test bodies. Use whenever the user wants to clean up a test suite, remove redundant/useless/tautological/AI-generated tests, mentions tests that "never fail" or "test nothing", asks to slim down CI time, or says "captain obvious". Works on TypeScript (Jest/Vitest/bun:test) and Python (pytest + mypy). The detection is fully deterministic — always run the bundled scripts, never scan test files one by one yourself.
+description: Finds and deletes "Captain Obvious" tests — tests that can never fail or check nothing. It catches assertions the type checker already guarantees (typeof/isinstance/toBeDefined on typed values), assertion-free tests, tautologies (expect(true).toBe(true), assert x == x, len >= 0), arrange-assert echoes (const x = 5; expect(x).toBe(5)), mock-echo tests, unawaited async assertions, dead/swallowed/conditional assertions, overly-broad pytest.raises(Exception), and duplicate test bodies. Use whenever the user wants to clean up a test suite, remove redundant/useless/tautological/AI-generated tests, mentions tests that "never fail" or "test nothing", or says "captain obvious". Works on TypeScript (Jest/Vitest/bun:test) and Python (pytest + mypy). The detection is fully deterministic — always run the bundled scripts, never scan test files one by one yourself.
 ---
 
 # Captain Obvious
@@ -26,9 +26,12 @@ file — one script invocation scans the whole project.
 
 ### 2. Safety first
 
-The fix step edits test files in place. Require a clean git working tree
-(untracked files are fine). If dirty, ask the user or stash. Never run `--fix`
-outside a git repository without explicit user confirmation.
+The fix step edits test files in place. Both scripts enforce this themselves:
+`--fix` exits 2 unless the target is a git repository with a clean working
+tree (untracked files are fine). If it refuses, stash or commit rather than
+reaching for `--force` — `--force` removes the only undo path there is
+(`git checkout -- <files>`), so use it only when the user has explicitly
+accepted that.
 
 ### 3. Scan (report-only)
 
@@ -138,3 +141,15 @@ group is the tool earning trust, not failing.
 - Assertions on values read from files/APIs at test time — real regression tests.
 - Tests asserting via custom helpers (`expectAllow(x)`, `self._check(...)`).
 - "Must not raise" contract tests for fail-open code paths.
+
+## When NOT to run this at all
+
+- **Mid red-green.** During TDD a test is *supposed* to be failing, and a
+  freshly-written test may not have its assertion yet. This is post-hoc
+  cleanup — run it once the suite is green, never between red and green.
+- **On a branch under review.** Scan (`--json`) is fine; `--fix` is not.
+  Rewriting test files while a reviewer or a merge gate is reading the diff
+  invalidates what they reviewed.
+- **As a coverage or CI-time optimizer.** It deletes tests that cannot fail,
+  which is a correctness argument, not a speed one. "CI is slow" is not a
+  reason to reach for it — a slow suite full of real tests stays slow.
