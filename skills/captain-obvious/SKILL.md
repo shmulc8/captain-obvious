@@ -33,6 +33,13 @@ reaching for `--force` — `--force` removes the only undo path there is
 (`git checkout -- <files>`), so use it only when the user has explicitly
 accepted that.
 
+Trust boundary: scanning executes the project's own toolchain. mypy loads
+`[tool.mypy] plugins` from the repo's config as in-process Python;
+`--mypy "uv run mypy"` / `"poetry run mypy"` resolve (and can run) the
+repo's dependencies; the TS side loads the repo's own `typescript`
+package. Run the scan only on repositories you would be willing to run
+`mypy`/`tsc` in yourself.
+
 ### 3. Scan (report-only)
 
 ```bash

@@ -99,6 +99,11 @@ to **proven rotten**; one that did execute is a confirmed false positive and is
 dropped — the dynamic half of the ICSE'19 analysis, using coverage your runner
 already emits.
 
+> **Trust boundary:** the scan runs the project's own toolchain — mypy (with
+> whatever plugins the repo's config loads), `uv`/`poetry` environments, the
+> repo's own `typescript` package. Treat scanning like running the repo's
+> type checker: only do it on code you trust.
+
 ## 🔍 Detector catalog
 
 | Category | Example | Level |
