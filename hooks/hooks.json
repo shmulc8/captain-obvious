@@ -1,0 +1,17 @@
+{
+  "description": "Write-time prevention: blocks Write/Edit calls that introduce proven can-never-fail test patterns. Set CAPTAIN_OBVIOUS_HOOK=warn or =off to downgrade.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prevent.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
