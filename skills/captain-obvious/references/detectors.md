@@ -104,6 +104,15 @@ about the code under test.
   dead assignments are dropped. Orphaned *imports* are left to the project's
   linter (`ruff --fix`), which resolves cross-file usage correctly.
 
+## Single-file mode (`--file <path> [--stdin]`)
+
+Scans exactly one file's content (from disk, or stdin with the path used
+for naming) and prints the JSON report to stdout. Syntactic categories
+only: no mypy, no tsc Program, no shadow files, no subprocesses — so
+`type-guaranteed` can never fire and everything it proves is true by
+construction. Built for write-time hooks (`hooks/prevent.py`); `--fix` is
+rejected in this mode. Parse failures report a note and zero findings.
+
 ## Coverage mode (`--coverage <file>`) — the dynamic half
 
 `conditional-assert` is, on its own, a *static guess*: an assertion behind an

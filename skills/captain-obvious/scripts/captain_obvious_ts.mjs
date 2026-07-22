@@ -22,14 +22,25 @@ import { fixBlocker } from './co_ts/gitguard.mjs';
 const argv = process.argv.slice(2);
 const argVal = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
 const projectArg = argVal('--project') ?? '.';
+const fileArg = argVal('--file');
+const useStdin = argv.includes('--stdin');
 const doFix = argv.includes('--fix');
 const jsonOut = argVal('--json');
 const coverageArg = argVal('--coverage');
 
 const force = argv.includes('--force');
 
-const projectPath = path.resolve(projectArg);
-const isFile = fs.existsSync(projectPath) && fs.statSync(projectPath).isFile();
+if (fileArg && doFix) {
+  console.error('captain-obvious: --fix is not supported with --file (single-file mode is report-only)');
+  process.exit(2);
+}
+if (useStdin && !fileArg) {
+  console.error('captain-obvious: --stdin requires --file');
+  process.exit(2);
+}
+
+const projectPath = path.resolve(fileArg ? path.dirname(path.resolve(fileArg)) : projectArg);
+const isFile = !fileArg && fs.existsSync(projectPath) && fs.statSync(projectPath).isFile();
 const projectDir = isFile ? path.dirname(projectPath) : projectPath;
 
 if (doFix && !force) {
@@ -52,6 +63,36 @@ try {
     console.error(`captain-obvious: cannot resolve "typescript" from ${projectDir}. Install it there (npm i -D typescript).`);
     process.exit(2);
   }
+}
+
+// ------------------------------------------------------------- single file
+// Syntactic-only scan of one file, JSON to stdout. Built for write-time
+// hooks: no Program, no TypeChecker, no tsconfig — a pure (tolerant) parse,
+// so the type-guaranteed family can never fire and bad syntax never throws.
+if (fileArg) {
+  const filePath = path.resolve(fileArg);
+  const content = useStdin ? fs.readFileSync(0, 'utf8') : fs.readFileSync(filePath, 'utf8');
+  const kind = /\.[jt]sx$/.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, kind);
+  const printer = ts.createPrinter({ removeComments: true });
+  const findings = [];
+  const records = [];
+  walk(ts, sf, n => {
+    const t = ts.isExpressionStatement(n) ? isTestBlock(ts, n) : null;
+    if (t) analyzeTest(ts, null, false, false, false, sf, t, findings, records, projectDir);
+  });
+  markDuplicates(ts, printer, records, findings, projectDir);
+  const sum = {};
+  for (const f of findings) {
+    sum[f.category] = sum[f.category] ?? { proven: 0, advisory: 0 };
+    sum[f.category][f.level]++;
+  }
+  console.log(JSON.stringify({
+    tool: 'captain-obvious/ts', file: filePath, mode: 'single-file',
+    typeChecksEnabled: false, testsScanned: records.length,
+    findings, summary: sum,
+  }, null, 2));
+  process.exit(0);
 }
 
 const testFiles = findTestFiles(projectDir);

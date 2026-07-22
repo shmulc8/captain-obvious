@@ -8,7 +8,9 @@ export function markDuplicates(ts, printer, testRecords, allFindings, projectDir
     const bodyText = ts.isBlock(rec.fn.body)
       ? printer.printNode(ts.EmitHint.Unspecified, rec.fn.body, rec.sf)
       : rec.fn.body.getText(rec.sf);
-    if (/MatchSnapshot|MatchInlineSnapshot/.test(bodyText)) continue;
+    // snapshot/baseline tests have identical bodies by design — each is keyed
+    // to a distinct stored baseline by test name, so deleting one orphans it
+    if (/Match\w*Snapshot/.test(bodyText)) continue;
     const bodyKey = canon(ts, bodyText);
     if (bodyKey.length < 8) continue;
     const key = enclosingDescribeKey(ts, rec.stmt, rec.sf) + '::' + bodyKey;
