@@ -1,5 +1,5 @@
 {
-  "description": "Write-time prevention: blocks Write/Edit calls that introduce proven can-never-fail test patterns. Set CAPTAIN_OBVIOUS_HOOK=warn or =off to downgrade.",
+  "description": "Write-time prevention: blocks Write/Edit calls that introduce proven can-never-fail test patterns. Off by default. Set CAPTAIN_OBVIOUS_HOOK=block or =warn to enable.",
   "hooks": {
     "PreToolUse": [
       {

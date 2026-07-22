@@ -12,7 +12,7 @@ Design rules:
   type-guaranteed findings, so everything it proves is true by construction
 - newly-introduced only: findings already present in the file's previous
   content never block an unrelated edit
-- modes via CAPTAIN_OBVIOUS_HOOK: block (default) | warn | off
+- modes via CAPTAIN_OBVIOUS_HOOK: off (default) | block | warn
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def compose_new_content(tool: str, ti: dict, old: str) -> str | None:
 
 def main() -> None:
     data = json.load(sys.stdin)
-    mode = os.environ.get("CAPTAIN_OBVIOUS_HOOK", "block").strip().lower()
+    mode = os.environ.get("CAPTAIN_OBVIOUS_HOOK", "off").strip().lower()
     if mode not in ("block", "warn"):
         return
 

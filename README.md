@@ -120,7 +120,7 @@ the spot.
   TDD red is safe: a deliberately *failing* test is not a can-never-fail test.
 - **Fails open, always.** Missing node, scanner crash, timeout, huge or
   syntactically-broken content — the write goes through.
-- **Configurable**: `CAPTAIN_OBVIOUS_HOOK=block` (default) | `warn` | `off`.
+- **Configurable**: `CAPTAIN_OBVIOUS_HOOK=off` (default) | `block` | `warn`.
 - Skill-only installs (`npx skills add`) don't get hooks — paste the
   test-writing rules from
   [`skills/captain-obvious/references/prevention.md`](skills/captain-obvious/references/prevention.md)

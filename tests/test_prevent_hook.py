@@ -76,7 +76,7 @@ class PreventHook(unittest.TestCase):
         self.assertEqual(out, "")
 
     def test_write_with_tautology_is_denied(self):
-        out = self.run_hook(self.write_payload("test_x.py", TAUTOLOGY_PY))
+        out = self.run_hook(self.write_payload("test_x.py", TAUTOLOGY_PY), mode="block")
         self.assertEqual(self.decision(out), "deny")
         reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn("constant-assert", reason)
@@ -94,7 +94,7 @@ class PreventHook(unittest.TestCase):
                    "tool_input": {"file_path": path,
                                   "old_string": "assert add(2, 2) == 4",
                                   "new_string": "assert True"}}
-        self.assertEqual(self.decision(self.run_hook(payload)), "deny")
+        self.assertEqual(self.decision(self.run_hook(payload, mode="block")), "deny")
 
     def test_preexisting_finding_does_not_block_unrelated_edit(self):
         path = os.path.join(self.dir, "test_x.py")
@@ -114,10 +114,14 @@ class PreventHook(unittest.TestCase):
                    "tool_input": {"file_path": path,
                                   "edits": [{"old_string": "assert add(2, 2) == 4",
                                              "new_string": "assert True"}]}}
-        self.assertEqual(self.decision(self.run_hook(payload)), "deny")
+        self.assertEqual(self.decision(self.run_hook(payload, mode="block")), "deny")
 
     def test_mode_off_allows(self):
         out = self.run_hook(self.write_payload("test_x.py", TAUTOLOGY_PY), mode="off")
+        self.assertEqual(out, "")
+
+    def test_default_mode_is_off_and_allows(self):
+        out = self.run_hook(self.write_payload("test_x.py", TAUTOLOGY_PY))
         self.assertEqual(out, "")
 
     def test_mode_warn_allows_with_message(self):
@@ -145,7 +149,7 @@ class PreventHook(unittest.TestCase):
                    'test("x equals itself", () => {\n'
                    '  expect(x).toBe(x);\n'
                    '});\n')
-        out = self.run_hook(self.write_payload("example.test.ts", content))
+        out = self.run_hook(self.write_payload("example.test.ts", content), mode="block")
         self.assertEqual(self.decision(out), "deny")
 
 
