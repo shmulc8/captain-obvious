@@ -46,12 +46,22 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
         seg = ast.get_source_segment(src, fn) or ""
         return "cast(" in seg or "type: ignore" in seg
 
+    def is_fixture(fn) -> bool:
+        for dec in fn.decorator_list:
+            func = dec.func if isinstance(dec, ast.Call) else dec
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "pytest" and func.attr == "fixture":
+                return True
+            if isinstance(func, ast.Name) and func.id == "fixture":
+                return True
+        return False
+
     def tests_in(container, scope_key, class_name=None):
         for n in container:
             if isinstance(n, ast.ClassDef) and n.name.startswith("Test"):
                 tests_in(n.body, f"{scope_key}::{n.name}", n.name)
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test"):
-                analyze_test(n, scope_key, class_name)
+                if not is_fixture(n):
+                    analyze_test(n, scope_key, class_name)
 
     def analyze_test(fn, scope_key, class_name):
         rec = TestRecord(path, fn, fn.name, scope_key)

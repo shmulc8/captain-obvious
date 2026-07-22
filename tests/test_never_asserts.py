@@ -23,6 +23,12 @@ CLI = os.path.join(REPO, "skills", "captain-obvious", "scripts", "captain_obviou
 
 FIXTURE = '''\
 import logging
+import pytest
+
+@pytest.fixture
+def test_fixture_starting_with_test():
+    return 1
+
 
 def do_work():
     return 1
@@ -136,6 +142,9 @@ class NeverAssertsGuard(unittest.TestCase):
         self.assertEqual(found["category"], "silent-smoke")
         self.assertEqual(found["level"], "proven")
         self.assertEqual(found["deletable"], "safe")
+
+    def test_fixture_is_ignored(self):
+        self.assertNotIn("test_fixture_starting_with_test", self._scan())
 
     def test_fix_keeps_only_the_test_that_can_still_fail(self):
         for args in (["init", "-q", "."], ["config", "user.email", "t@example.com"],
