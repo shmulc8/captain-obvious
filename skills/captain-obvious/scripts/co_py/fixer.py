@@ -1,5 +1,6 @@
 from __future__ import annotations
 import ast
+import os
 
 from .models import TestRecord, Finding
 
@@ -37,10 +38,16 @@ def _dangling_edits(rec, removed_nodes, lines):
     return edits
 
 
-def apply_fix(records: list[TestRecord], root: str):
+def plan_removals(records: list[TestRecord], root: str):
+    """Decide what plain --fix would remove, without touching any file.
+
+    Returns (edits_by_file, plan) where plan mirrors the TS report's shape:
+    {"testsToRemove": [{file, line, test}], "assertionsToRemove": N}.
+    """
     edits_by_file: dict[str, list[tuple[int, int, str | None]]] = {}
     file_lines: dict[str, list[str]] = {}
-    tests_removed, asserts_removed = 0, 0
+    tests_to_remove: list[dict] = []
+    asserts_removed = 0
 
     def lines_of(f):
         if f not in file_lines:
@@ -80,7 +87,8 @@ def apply_fix(records: list[TestRecord], root: str):
         if whole:
             start = min([d.lineno for d in rec.node.decorator_list] + [rec.node.lineno])
             spans.append((start, rec.node.end_lineno, None))
-            tests_removed += 1
+            tests_to_remove.append({"file": os.path.relpath(rec.file, root),
+                                    "line": rec.node.lineno, "test": rec.name})
         else:
             removed_nodes = []
             for f in rec.findings:
@@ -96,6 +104,19 @@ def apply_fix(records: list[TestRecord], root: str):
                         asserts_removed += 1
             if removed_nodes:
                 spans.extend(_dangling_edits(rec, removed_nodes, lines_of(rec.file)))
+
+    plan = {"testsToRemove": tests_to_remove, "assertionsToRemove": asserts_removed}
+    return edits_by_file, plan
+
+
+def apply_fix(records: list[TestRecord], root: str):
+    edits_by_file, plan = plan_removals(records, root)
+    file_lines: dict[str, list[str]] = {}
+
+    def lines_of(f):
+        if f not in file_lines:
+            file_lines[f] = open(f, encoding="utf-8").read().splitlines(keepends=True)
+        return file_lines[f]
 
     files_changed = 0
     for file, spans in edits_by_file.items():
@@ -117,5 +138,6 @@ def apply_fix(records: list[TestRecord], root: str):
         with open(file, "w", encoding="utf-8") as fh:
             fh.writelines(new)
         files_changed += 1
-    return {"testsRemoved": tests_removed, "assertionsRemoved": asserts_removed,
+    return {"testsRemoved": len(plan["testsToRemove"]),
+            "assertionsRemoved": plan["assertionsToRemove"],
             "filesChanged": files_changed}

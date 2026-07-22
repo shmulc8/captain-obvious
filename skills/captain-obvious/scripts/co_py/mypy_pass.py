@@ -8,7 +8,7 @@ import sys
 
 from .models import Probe, TestRecord, Finding
 from .ast_utils import walk_no_nested_funcs, call_name
-from .discovery import SKIP_DIRS, SHADOW_PREFIX
+from .discovery import SKIP_DIRS, SHADOW_PREFIX, is_test_filename
 
 REVEAL_RE = re.compile(r'^(.*?):(\d+):(?:\d+:)?\s*note: Revealed type is "(.*)"\s*$')
 ANY_RETURN_RE = re.compile(r'^(.*?):(\d+):(?:\d+:)?\s*(?:error|warning):.*\[no-any-return\]\s*$')
@@ -125,10 +125,15 @@ def propagate_laundering(root: str, seed: set[str]) -> set[str]:
 
 
 def run_mypy_probes(probes: list[Probe], root: str,
-                    mypy_cmd: list[str] | None) -> tuple[str | None, set[str]]:
-    """Insert reveal_type() shadow files, run mypy once, map notes back."""
+                    mypy_cmd: list[str] | None) -> tuple[str | None, set[str], bool]:
+    """Insert reveal_type() shadow files, run mypy once, map notes back.
+
+    Returns (note, laundering_functions, laundering_visible). laundering_visible
+    is False when no source targets could be found for mypy — the Any-laundering
+    guard cannot run, so type-guaranteed findings must not be promoted to proven.
+    """
     if not probes:
-        return None, set()
+        return None, set(), True
     by_file: dict[str, list[Probe]] = {}
     for p in probes:
         by_file.setdefault(p.file, []).append(p)
@@ -168,13 +173,20 @@ def run_mypy_probes(probes: list[Probe], root: str,
         # tree must be in the run for [no-any-return] laundering detection
         src_targets = []
         if os.path.isdir(os.path.join(root, "src")):
-            src_targets.append("src")
+            src_targets.append(os.path.join(root, "src"))
         else:
             for d in sorted(os.listdir(root)):
                 if d in SKIP_DIRS or d.startswith(".") or d in ("tests", "test"):
                     continue
                 if os.path.isfile(os.path.join(root, d, "__init__.py")):
-                    src_targets.append(d)
+                    src_targets.append(os.path.join(root, d))
+        if not src_targets:
+            # flat layout: top-level modules are the source tree
+            for fn in sorted(os.listdir(root)):
+                if fn.endswith(".py") and not fn.startswith(SHADOW_PREFIX) \
+                        and not is_test_filename(fn):
+                    src_targets.append(os.path.join(root, fn))
+        laundering_visible = bool(src_targets)
 
         proc = None
         usable = False
@@ -194,7 +206,8 @@ def run_mypy_probes(probes: list[Probe], root: str,
                 proc = None
                 continue
         if proc is None:
-            return ("mypy not runnable — type-guaranteed checks skipped (install mypy or pass --mypy)", set())
+            return ("mypy not runnable — type-guaranteed checks skipped (install mypy or pass --mypy)",
+                    set(), True)
         if not usable:
             # mypy ran but exited >=2 (fatal / bad config / unreadable source).
             # Without this branch every probe keeps revealed=None, resolve_probes
@@ -202,7 +215,7 @@ def run_mypy_probes(probes: list[Probe], root: str,
             # type-guaranteed category vanishes with no user-facing signal.
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
             first = detail[0][:200] if detail else f"exit {proc.returncode}"
-            return (f"mypy failed ({first}) — type-guaranteed checks skipped", set())
+            return (f"mypy failed ({first}) — type-guaranteed checks skipped", set(), True)
 
         any_return_sites: set[tuple[str, int]] = set()
         for line in proc.stdout.splitlines():
@@ -222,7 +235,18 @@ def run_mypy_probes(probes: list[Probe], root: str,
                     fpath = os.path.abspath(m.group(1))
                 any_return_sites.add((fpath, int(m.group(2))))
         seed = enclosing_function_names(any_return_sites)
-        return None, propagate_laundering(root, seed)
+        note = None
+        if not laundering_visible:
+            note = ("no source packages or top-level modules found under the project root — "
+                    "mypy cannot see the code under test, so the Any-laundering guard is "
+                    "unavailable; type-guaranteed findings demoted to advisory")
+        return note, propagate_laundering(root, seed), laundering_visible
+    except OSError as e:
+        # e.g. read-only checkout: shadow files cannot be written next to the
+        # tests. Degrade to the syntactic categories instead of crashing the
+        # whole scan — and say so, like every other degradation path.
+        return (f"cannot write reveal_type() shadow files ({e}) — "
+                "type-guaranteed checks skipped", set(), True)
     finally:
         for s in shadow_files:
             try:
@@ -232,7 +256,8 @@ def run_mypy_probes(probes: list[Probe], root: str,
 
 
 def resolve_probes(probes: list[Probe], records: list[TestRecord], root: str,
-                    laundering: set[str] | None = None):
+                    laundering: set[str] | None = None,
+                    laundering_visible: bool = True):
     laundering = laundering or set()
     recs_by_key = {}
     for r in records:
@@ -277,6 +302,12 @@ def resolve_probes(probes: list[Probe], records: list[TestRecord], root: str,
                     and base_name(members[0]) in p.extra:
                 f = Finding(p.file, p.line, rec.name, "type-guaranteed", "advisory", "aggressive",
                             f'revealed type is "{p.revealed}", but a subclass instance would still fail type() is — advisory', node=a)
+        if f is not None and f.level == "proven" and not laundering_visible:
+            # without source targets mypy never emits [no-any-return], so the
+            # laundering exemption can't clear this finding — don't auto-delete
+            f.level, f.deletable = "advisory", "report-only"
+            f.reason += (" — but mypy could not see the source tree, so an Any-laundering "
+                         "annotation may be behind this type; verify before removing")
         if f is not None:
             rec.findings.append(f)
         else:

@@ -99,6 +99,33 @@ to **proven rotten**; one that did execute is a confirmed false positive and is
 dropped — the dynamic half of the ICSE'19 analysis, using coverage your runner
 already emits.
 
+> **Trust boundary:** the scan runs the project's own toolchain — mypy (with
+> whatever plugins the repo's config loads), `uv`/`poetry` environments, the
+> repo's own `typescript` package. Treat scanning like running the repo's
+> type checker: only do it on code you trust.
+
+## 🛡️ Prevention (write-time hook)
+
+Removing dead tests after the fact pays for them twice — once to write them,
+once to clean them up. Installed **as a plugin**, captain-obvious also ships a
+`PreToolUse` hook that catches them *before they land*: whenever the agent
+writes or edits a test file, the pending content runs through a fast
+syntactic-only single-file scan (`--file --stdin`; no mypy, no tsc, no
+side effects), and the call is **denied with a per-finding reason** if it
+would introduce proven can-never-fail patterns. The agent fixes the test on
+the spot.
+
+- **Proven, newly-introduced findings only.** Advisories never block, and a
+  pre-existing finding elsewhere in the file never blocks an unrelated edit.
+  TDD red is safe: a deliberately *failing* test is not a can-never-fail test.
+- **Fails open, always.** Missing node, scanner crash, timeout, huge or
+  syntactically-broken content — the write goes through.
+- **Configurable**: `CAPTAIN_OBVIOUS_HOOK=block` (default) | `warn` | `off`.
+- Skill-only installs (`npx skills add`) don't get hooks — paste the
+  test-writing rules from
+  [`skills/captain-obvious/references/prevention.md`](skills/captain-obvious/references/prevention.md)
+  into your `CLAUDE.md` instead.
+
 ## 🔍 Detector catalog
 
 | Category | Example | Level |
