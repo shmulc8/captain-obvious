@@ -35,6 +35,12 @@ sys.stderr.write("mypy.ini: [mypy]: Unrecognized option: nonsense = 1\\n")
 sys.exit(2)
 '''
 
+FAKE_MYPY_NO_MODULE = '''\
+import sys
+sys.stderr.write("/path/to/python: No module named mypy\\n")
+sys.exit(1)
+'''
+
 
 class MypyFailureIsReported(unittest.TestCase):
     def setUp(self):
@@ -59,6 +65,22 @@ class MypyFailureIsReported(unittest.TestCase):
             note = json.load(fh)["mypyNote"]
         self.assertIsNotNone(note, "mypy exited 2 but no note was reported")
         self.assertIn("mypy failed", note)
+
+    def test_no_mypy_module_found_exits_1_surfaces_a_note(self):
+        """If sys.executable -m mypy exits with 1 but stderr says No module named mypy,
+        it must show that mypy is not runnable."""
+        fake_missing = os.path.join(self.dir, "fake_missing.py")
+        with open(fake_missing, "w", encoding="utf-8") as fh:
+            fh.write(FAKE_MYPY_NO_MODULE)
+        out = os.path.join(self.dir, "report.json")
+        subprocess.run(
+            [sys.executable, CLI, "--path", self.dir, "--json", out,
+             "--mypy", f"{sys.executable} {fake_missing}"],
+            capture_output=True, text=True, check=True)
+        with open(out, encoding="utf-8") as fh:
+            note = json.load(fh)["mypyNote"]
+        self.assertIsNotNone(note, "mypy was not found but no note was reported")
+        self.assertIn("mypy not runnable", note)
 
 
 class ShadowFilesAreNotTests(unittest.TestCase):

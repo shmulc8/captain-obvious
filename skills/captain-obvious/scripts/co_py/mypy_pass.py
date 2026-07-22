@@ -200,6 +200,9 @@ def run_mypy_probes(probes: list[Probe], root: str,
                            "--show-column-numbers"] + shadow_files + src_targets,
                     cwd=root, capture_output=True, text=True, timeout=600)
                 if "Revealed type" in proc.stdout or proc.returncode in (0, 1):
+                    if "No module named mypy" in (proc.stderr or "") or "No module named mypy" in (proc.stdout or ""):
+                        proc = None
+                        continue
                     usable = True
                     break
             except (FileNotFoundError, subprocess.TimeoutExpired):
