@@ -20,12 +20,19 @@ from .ast_utils import (
 def _is_noise_call(node: ast.Call) -> bool:
     """print()/logging.* — never meaningful coverage, so they don't count as
     executable remnants keeping an otherwise-inert test alive."""
-    f = node.func
-    if isinstance(f, ast.Name):
-        return f.id == "print"
-    while isinstance(f, ast.Attribute):
-        f = f.value
-    return isinstance(f, ast.Name) and f.id in ("logging", "log", "logger")
+    curr = node.func
+    while True:
+        if isinstance(curr, ast.Attribute):
+            if curr.attr in ("logging", "log", "logger"):
+                return True
+            curr = curr.value
+        elif isinstance(curr, ast.Call):
+            curr = curr.func
+        elif isinstance(curr, ast.Name):
+            return curr.id in ("print", "logging", "log", "logger")
+        else:
+            break
+    return False
 
 
 def analyze_file(path: str, src: str, tree: ast.Module, root: str,
@@ -175,12 +182,20 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
             # the raise), so it doesn't count; nor does the assertion
             # machinery itself, nor print/logging.
             assert_ids = {id(a) for a in assert_nodes}
-            remnant = any(
-                isinstance(d, ast.Call)
-                and id(d) not in assert_ids
-                and id(d) not in silently_guarded
-                and not _is_noise_call(d)
-                for d in walk_no_nested_funcs(fn))
+            def is_remnant(d):
+                if not isinstance(d, ast.Call):
+                    return False
+                if id(d) in assert_ids:
+                    return False
+                if id(d) in silently_guarded:
+                    return False
+                if _is_noise_call(d):
+                    return False
+                ts = top_stmt_of(d)
+                if ts is not None and id(ts) in unreachable:
+                    return False
+                return True
+            remnant = any(is_remnant(d) for d in walk_no_nested_funcs(fn))
             if remnant:
                 rec.findings.append(Finding(
                     path, fn.lineno, fn.name, "never-asserts", "advisory", "report-only",

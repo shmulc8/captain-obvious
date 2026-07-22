@@ -57,12 +57,26 @@ if (doFix && !force) {
 // ------------------------------------------------- load project's TypeScript
 let ts;
 try {
-  ts = createRequire(path.join(projectDir, 'package.json'))('typescript');
+  const requireShim = createRequire(path.join(projectDir, 'package.json'));
+  ts = requireShim('typescript');
+  if (ts && !ts.sys) {
+    try { ts = requireShim('typescript/lib/typescript.js'); } catch {}
+  }
 } catch {
-  try { ts = (await import('typescript')).default; } catch {
+  try {
+    ts = (await import('typescript')).default;
+    if (ts && !ts.sys) {
+      try { ts = (await import('typescript/lib/typescript.js')).default; } catch {}
+    }
+  } catch {
     console.error(`captain-obvious: cannot resolve "typescript" from ${projectDir}. Install it there (npm i -D typescript).`);
     process.exit(2);
   }
+}
+
+if (!ts || !ts.sys) {
+  console.error(`captain-obvious: cannot load valid "typescript" from ${projectDir} (missing ts.sys).`);
+  process.exit(2);
 }
 
 // ------------------------------------------------------------- single file
