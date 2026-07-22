@@ -10,13 +10,16 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".tox",
 # without this guard the next scan collects it as a real test file.
 SHADOW_PREFIX = "_cap_obv_shadow_"
 
+def is_test_filename(name: str) -> bool:
+    if name.startswith(SHADOW_PREFIX):
+        return False
+    return name.startswith("test_") and name.endswith(".py") or name.endswith("_test.py")
+
 def find_test_files(root: str) -> list[str]:
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
         for f in filenames:
-            if f.startswith(SHADOW_PREFIX):
-                continue
-            if f.startswith("test_") and f.endswith(".py") or f.endswith("_test.py"):
+            if is_test_filename(f):
                 out.append(os.path.join(dirpath, f))
     return sorted(out)
