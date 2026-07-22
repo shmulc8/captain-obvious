@@ -44,6 +44,10 @@ python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --json /tmp/co-p
   the project's own environment: pass `--mypy "uv run mypy"` for uv projects,
   `--mypy "poetry run mypy"` for poetry, etc. If mypy isn't available it
   degrades gracefully to the syntactic categories.
+- Note: the mypy pass briefly writes `_cap_obv_shadow_*` copies next to test
+  files (removed when the run ends) — so a "report-only" scan does touch the
+  working tree. Pass `--no-types` for a strictly read-only scan; if the tree
+  is not writable the scan degrades to syntactic categories and says so.
 - The TS detector resolves the project's own `typescript` package; without a
   tsconfig it degrades to syntactic categories.
 - **If the project already produces coverage** (or you can cheaply run it),

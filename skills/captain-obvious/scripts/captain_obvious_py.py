@@ -112,13 +112,15 @@ def main():
 
     mypy_note = None
     laundering: set[str] = set()
+    laundering_visible = True
     if args.no_types:
         for p in probes:
             p.revealed = None
         mypy_note = "type checks skipped (--no-types)"
     else:
-        mypy_note, laundering = run_mypy_probes(probes, root, args.mypy.split() if args.mypy else None)
-    resolve_probes(probes, records, root, laundering)
+        mypy_note, laundering, laundering_visible = run_mypy_probes(
+            probes, root, args.mypy.split() if args.mypy else None)
+    resolve_probes(probes, records, root, laundering, laundering_visible)
 
     mark_duplicates(records)
 

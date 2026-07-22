@@ -5,6 +5,24 @@ import re
 
 from .models import TestRecord, Finding
 
+# snapshot/baseline fixtures (syrupy, pytest-regressions, approvaltests): the
+# test BODY is identical by design — each test is keyed to a distinct stored
+# baseline by its name, so deleting an apparent duplicate orphans that baseline
+# (and suites running with unused-snapshot checks then fail).
+BASELINE_NAMES = {"snapshot", "snapshot_json", "data_regression", "file_regression",
+                  "image_regression", "num_regression", "ndarrays_regression",
+                  "dataframe_regression", "verify", "verify_file", "verify_as_json"}
+
+
+def _uses_baseline(node: ast.AST) -> bool:
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and n.id in BASELINE_NAMES:
+            return True
+        if isinstance(n, ast.Attribute) and n.attr in BASELINE_NAMES:
+            return True
+    return False
+
+
 def _name_tokens(name: str) -> set[str]:
     words = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)
     return {w.lower() for w in words if w.lower() not in ("test",) and not w.isdigit()}
@@ -28,6 +46,8 @@ def mark_duplicates(records: list[TestRecord]):
         except Exception:
             continue
         if len(body_dump) < 60:
+            continue
+        if _uses_baseline(rec.node):
             continue
         key = (rec.file, rec.scope_key, deco_dump, body_dump)
         if key in seen:
