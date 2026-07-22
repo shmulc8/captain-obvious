@@ -173,10 +173,55 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
   }
 
   if (realAsserts.length === 0) {
-    rec.findings.push({ category: 'no-assert', level: 'advisory', deletable: 'report-only',
-      reason: 'assertion-free smoke test — legitimate by design (it checks the code runs ' +
-        "without throwing). ICSE'19 distinguishes smoke tests from rotten tests; only worth a " +
-        'look if an assertion was clearly intended here', stmtRef: null });
+    const isNoiseCall = (expr) => {
+      let curr = expr;
+      while (curr) {
+        if (ts.isCallExpression(curr) || ts.isNewExpression(curr)) {
+          curr = curr.expression;
+        } else if (ts.isPropertyAccessExpression(curr)) {
+          const name = curr.name.text;
+          if (name === 'console' || name === 'log' || name === 'logger' || name === 'logging') return true;
+          curr = curr.expression;
+        } else if (ts.isElementAccessExpression(curr) || ts.isNonNullExpression(curr) ||
+                   ts.isAwaitExpression(curr) || ts.isParenthesizedExpression(curr)) {
+          curr = curr.expression;
+        } else if (ts.isIdentifier(curr)) {
+          const text = curr.text;
+          return text === 'console' || text === 'log' || text === 'logger' || text === 'logging';
+        } else if (curr.kind === ts.SyntaxKind.ThisKeyword) {
+          return false;
+        } else {
+          break;
+        }
+      }
+      return false;
+    };
+
+    let hasCalls = false;
+    let allCallsGuarded = true;
+    walk(ts, body, n => {
+      if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+        if (!isNoiseCall(n)) {
+          hasCalls = true;
+          if (!silentlyGuarded.has(n)) {
+            allCallsGuarded = false;
+          }
+        }
+      }
+    });
+
+    if (hasCalls && allCallsGuarded) {
+      rec.findings.push({ category: 'silent-smoke', level: 'proven', deletable: 'safe',
+        reason: 'assertion-free test where every call is wrapped in a try{} with a silent catch — the test can never fail', stmtRef: null });
+    } else if (!hasCalls) {
+      rec.findings.push({ category: 'silent-smoke', level: 'proven', deletable: 'safe',
+        reason: 'assertion-free test containing no calls — the test does nothing and can never fail', stmtRef: null });
+    } else {
+      rec.findings.push({ category: 'no-assert', level: 'advisory', deletable: 'report-only',
+        reason: 'assertion-free smoke test — legitimate by design (it checks the code runs ' +
+          "without throwing). ICSE'19 distinguishes smoke tests from rotten tests; only worth a " +
+          'look if an assertion was clearly intended here', stmtRef: null });
+    }
     for (const f of rec.findings) allFindings.push(toReportFinding(projectDir, rec, f));
     testRecords.push(rec);
     return;

@@ -159,20 +159,30 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 continue
             live.append(a)
 
-        # -- no-assert / never-asserts
+        # -- no-assert / never-asserts / silent-smoke
         doc = ast.get_docstring(fn) or ""
         contract_like = bool(MUST_NOT_RAISE_RE.search(fn.name) or MUST_NOT_RAISE_RE.search(doc))
         if not assert_nodes:
-            if contract_like:
+            calls = [d for d in walk_no_nested_funcs(fn) if isinstance(d, ast.Call) and not _is_noise_call(d)]
+            if calls and all(id(c) in silently_guarded for c in calls):
                 rec.findings.append(Finding(
-                    path, fn.lineno, fn.name, "no-assert", "advisory", "report-only",
-                    "no assertion, but the name/docstring suggests a deliberate must-not-raise contract test — review by hand"))
+                    path, fn.lineno, fn.name, "silent-smoke", "proven", "safe",
+                    "assertion-free test where every call is wrapped in a try/except with a silent catch — the test can never fail"))
+            elif not calls:
+                rec.findings.append(Finding(
+                    path, fn.lineno, fn.name, "silent-smoke", "proven", "safe",
+                    "assertion-free test containing no calls — the test does nothing and can never fail"))
             else:
-                rec.findings.append(Finding(
-                    path, fn.lineno, fn.name, "no-assert", "advisory", "report-only",
-                    "assertion-free smoke test — legitimate by design (it checks the code runs "
-                    "without raising). ICSE'19 distinguishes smoke tests from rotten tests; only "
-                    "worth a look if an assertion was clearly intended here"))
+                if contract_like:
+                    rec.findings.append(Finding(
+                        path, fn.lineno, fn.name, "no-assert", "advisory", "report-only",
+                        "no assertion, but the name/docstring suggests a deliberate must-not-raise contract test — review by hand"))
+                else:
+                    rec.findings.append(Finding(
+                        path, fn.lineno, fn.name, "no-assert", "advisory", "report-only",
+                        "assertion-free smoke test — legitimate by design (it checks the code runs "
+                        "without raising). ICSE'19 distinguishes smoke tests from rotten tests; only "
+                        "worth a look if an assertion was clearly intended here"))
             return
         if not live:
             # Every assertion is dead or swallowed, so the assertions can't

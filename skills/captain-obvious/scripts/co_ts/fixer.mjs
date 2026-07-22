@@ -12,7 +12,7 @@ export function decideRemovals(ts, testRecords, doFix, report, fs, projectDir) {
       removableTests.push(rec);
       continue;
     }
-    const never = rec.findings.find(f => f.category === 'never-asserts');
+    const never = rec.findings.find(f => ['never-asserts', 'silent-smoke'].includes(f.category));
     if (never) {
       if (wants(never)) removableTests.push(rec);
       continue;

@@ -73,6 +73,17 @@ test("test_call_inside_assertion_argument", () => {
   return;
   expect(1).toBe(2);
 });
+
+test("test_silent_smoke_with_call", () => {
+  try {
+    doWork();
+  } catch (e) {
+    // silent catch
+  }
+});
+
+test("test_silent_smoke_empty", () => {
+});
 '''
 
 
@@ -91,38 +102,55 @@ class NeverAssertsTsGuard(unittest.TestCase):
                        capture_output=True, text=True, check=True)
         with open(out, encoding="utf-8") as fh:
             report = json.load(fh)
-        return {f["test"]: f for f in report["findings"]
-                if f["category"] == "never-asserts"}
+        return {f["test"]: f for f in report["findings"]}
 
     def test_unguarded_call_makes_it_advisory(self):
         found = self._scan()["test_unreachable_assert_with_live_call"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "advisory")
         self.assertEqual(found["deletable"], "report-only")
 
     def test_swallowed_everything_stays_proven(self):
         found = self._scan()["test_swallowed_everything"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "proven")
         self.assertEqual(found["deletable"], "safe")
 
     def test_truly_inert_test_stays_proven(self):
         found = self._scan()["test_swallowed_and_truly_inert"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "proven")
         self.assertEqual(found["deletable"], "safe")
 
     def test_unreachable_call_after_return_stays_proven(self):
         found = self._scan()["test_unreachable_call_after_return"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "proven")
         self.assertEqual(found["deletable"], "safe")
 
     def test_logger_noise_call_stays_proven(self):
         found = self._scan()["test_logger_noise_call"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "proven")
         self.assertEqual(found["deletable"], "safe")
 
     def test_call_inside_assertion_argument_makes_it_advisory(self):
         found = self._scan()["test_call_inside_assertion_argument"]
+        self.assertEqual(found["category"], "never-asserts")
         self.assertEqual(found["level"], "advisory")
         self.assertEqual(found["deletable"], "report-only")
+
+    def test_silent_smoke_with_call_is_proven(self):
+        found = self._scan()["test_silent_smoke_with_call"]
+        self.assertEqual(found["category"], "silent-smoke")
+        self.assertEqual(found["level"], "proven")
+        self.assertEqual(found["deletable"], "safe")
+
+    def test_silent_smoke_empty_is_proven(self):
+        found = self._scan()["test_silent_smoke_empty"]
+        self.assertEqual(found["category"], "silent-smoke")
+        self.assertEqual(found["level"], "proven")
+        self.assertEqual(found["deletable"], "safe")
 
     def test_fix_keeps_only_the_test_that_can_still_fail(self):
         for args in (["init", "-q", "."], ["config", "user.email", "t@example.com"],
@@ -138,6 +166,8 @@ class NeverAssertsTsGuard(unittest.TestCase):
         self.assertNotIn("test_swallowed_and_truly_inert", remaining)
         self.assertNotIn("test_unreachable_call_after_return", remaining)
         self.assertNotIn("test_logger_noise_call", remaining)
+        self.assertNotIn("test_silent_smoke_with_call", remaining)
+        self.assertNotIn("test_silent_smoke_empty", remaining)
 
 
 if __name__ == "__main__":

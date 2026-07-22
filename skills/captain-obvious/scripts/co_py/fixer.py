@@ -61,7 +61,7 @@ def plan_removals(records: list[TestRecord], root: str):
         whole = False
         if rec.is_duplicate and any(f.category == "duplicate-test" and want(f) for f in rec.findings):
             whole = True
-        elif any(f.category == "never-asserts" and want(f) for f in rec.findings):
+        elif any(f.category in ("never-asserts", "silent-smoke") and want(f) for f in rec.findings):
             whole = True
         else:
             deletable = [f for f in rec.findings if f.node is not None and want(f)
