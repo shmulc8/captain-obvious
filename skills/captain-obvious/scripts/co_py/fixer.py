@@ -72,6 +72,20 @@ def plan_removals(records: list[TestRecord], root: str):
                   "are never rewritten (the write would follow the link)",
                   file=sys.stderr)
             continue
+        del_nodes = {id(getattr(f.node, "_orig_stmt", f.node)) for f in rec.findings
+                     if f.node is not None and want(f)}
+
+        def _trivial(stmt):
+            if isinstance(stmt, ast.Pass):
+                return True
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                return True  # docstring / bare literal
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                val = stmt.value
+                return val is None or not any(
+                    isinstance(n, ast.Call) for n in ast.walk(val))
+            return False
+
         whole = False
         if rec.is_duplicate and any(f.category == "duplicate-test" and want(f) for f in rec.findings):
             whole = True
@@ -82,19 +96,6 @@ def plan_removals(records: list[TestRecord], root: str):
                          and f.category != "dead-assert"]
             if (rec.live_assert_count > 0 and len(deletable) == rec.live_assert_count
                     and rec.nonredundant == 0 and rec.conditional == 0 and rec.helper_asserts == 0):
-                del_nodes = {id(f.node) for f in deletable}
-
-                def _trivial(stmt):
-                    if isinstance(stmt, ast.Pass):
-                        return True
-                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
-                        return True  # docstring / bare literal
-                    if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-                        val = stmt.value
-                        return val is None or not any(
-                            isinstance(n, ast.Call) for n in ast.walk(val))
-                    return False
-
                 whole = all(id(s) in del_nodes or _trivial(s) for s in rec.node.body)
 
         spans = edits_by_file.setdefault(rec.file, [])
@@ -109,12 +110,13 @@ def plan_removals(records: list[TestRecord], root: str):
                 if f.node is not None and want(f):
                     report_only_asserts = sum(1 for x in rec.findings
                                               if x.node is not None and x.deletable == "report-only")
-                    ok_partial = (f.category == "dead-assert" or
+                    has_other_code = any(id(s) not in del_nodes and not _trivial(s) for s in rec.node.body)
+                    ok_partial = (f.category == "dead-assert" or has_other_code or
                                   rec.nonredundant + rec.helper_asserts + rec.conditional
                                   + report_only_asserts > 0)
                     if ok_partial:
                         spans.append((f.node.lineno, f.node.end_lineno, None))
-                        removed_nodes.append(f.node)
+                        removed_nodes.append(getattr(f.node, "_orig_stmt", f.node))
                         asserts_removed += 1
             if removed_nodes:
                 spans.extend(_dangling_edits(rec, removed_nodes, lines_of(rec.file)))

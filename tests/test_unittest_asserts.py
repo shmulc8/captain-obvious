@@ -60,39 +60,40 @@ class UnittestAsserts(unittest.TestCase):
     def by_test(self):
         return {f["test"]: f for f in self.report()["findings"]}
 
-    def test_const_is_report_only_constant_assert(self):
+    def test_const_is_safe_constant_assert(self):
         f = self.by_test()["test_const"]
         self.assertEqual(f["category"], "constant-assert")
         self.assertEqual(f["level"], "proven")
-        self.assertEqual(f["deletable"], "report-only")
-        self.assertTrue(f["reason"].endswith(SUFFIX), f["reason"])
+        self.assertEqual(f["deletable"], "safe")
 
-    def test_eq_literal_is_report_only(self):
+    def test_eq_literal_is_safe(self):
         f = self.by_test()["test_eq_literal"]
         self.assertEqual(f["category"], "constant-assert")
         self.assertEqual(f["level"], "proven")
-        self.assertEqual(f["deletable"], "report-only")
+        self.assertEqual(f["deletable"], "safe")
 
-    def test_self_eq_is_report_only(self):
+    def test_self_eq_is_safe(self):
         f = self.by_test()["test_self_eq"]
         self.assertEqual(f["category"], "constant-assert")
-        self.assertEqual(f["deletable"], "report-only")
+        self.assertEqual(f["deletable"], "safe")
 
     def test_real_has_no_finding(self):
         self.assertNotIn("test_real", self.by_test())
 
-    def test_plan_is_empty(self):
+    def test_plan_removes_assertions(self):
         plan = self.report()["plan"]
-        self.assertEqual(plan["testsToRemove"], [])
-        self.assertEqual(plan["assertionsToRemove"], 0)
+        self.assertEqual(len(plan["testsToRemove"]), 2)
+        self.assertEqual(plan["assertionsToRemove"], 1)
 
-    def test_fix_is_inert(self):
-        before = open(self.test_file, "rb").read()
+    def test_fix_removes_redundant_unittest_asserts(self):
         subprocess.run([sys.executable, CLI, "--path", self.dir, "--fix", "--force",
                         "--no-types"],
                        capture_output=True, text=True, check=True)
-        after = open(self.test_file, "rb").read()
-        self.assertEqual(before, after)
+        src = open(self.test_file, encoding="utf-8").read()
+        self.assertNotIn("self.assertTrue(True)", src)
+        self.assertNotIn("self.assertEqual(1, 1)", src)
+        self.assertNotIn("self.assertEqual(x, x)", src)
+        self.assertIn('self.assertEqual(compute(), "expected")', src)
 
 
 if __name__ == "__main__":

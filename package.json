@@ -1,0 +1,12 @@
+{
+  "name": "captain-obvious",
+  "version": "1.0.0",
+  "description": "Agent skill to detect and remove proven redundant test assertions",
+  "scripts": {
+    "test": "python3 -m unittest discover tests"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "private": true
+}

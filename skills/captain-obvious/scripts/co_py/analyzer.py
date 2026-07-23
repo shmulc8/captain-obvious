@@ -41,7 +41,7 @@ _UNITTEST_TRUE = {"assertTrue"}
 _UNITTEST_ISINSTANCE = {"assertIsInstance"}
 _UNITTEST_NONE = {"assertIsNone", "assertIsNotNone"}
 
-def _unittest_call_to_assert(call: ast.Call) -> ast.Assert | None:
+def _unittest_call_to_assert(call: ast.Call, ts: ast.AST | None = None) -> ast.Assert | None:
     """Map self.assert<X>(...) to an equivalent synthetic ast.Assert whose
     .test mirrors the bare-assert form, so classify_assert and the mypy
     probe queue can reason about it. Returns None for unrecognized shapes.
@@ -71,6 +71,7 @@ def _unittest_call_to_assert(call: ast.Call) -> ast.Assert | None:
     if t is None:
         return None
     a = ast.Assert(test=t, msg=None)
+    a._orig_stmt = ts or call
     for n in ast.walk(a):
         ast.copy_location(n, call)
     ast.copy_location(a, call)
@@ -324,13 +325,13 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                 synth = None
                 if isinstance(a, ast.Call) and ts is not None \
                         and isinstance(ts, ast.Expr) and ts.value is a:
-                    synth = _unittest_call_to_assert(a)
+                    synth = _unittest_call_to_assert(a, ts)
                 if synth is not None:
                     unittest_asserts.append(synth)
                 else:
                     rec.nonredundant += 1  # helper call, with-raises, etc.
 
-        rec.live_assert_count = len(plain_live_asserts)
+        rec.live_assert_count = len(plain_live_asserts) + len(unittest_asserts)
 
         # -- try-except without fail (missed-fail)
         for d in walk_no_nested_funcs(fn):
@@ -464,7 +465,7 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
             else:
                 rec.findings.append(f)
 
-        # -- classify recognized unittest assert-methods (report-only stage)
+        # -- classify recognized unittest assert-methods
         for a in unittest_asserts:
             # throwaway probe list ([], NOT the real `probes`): this stage does
             # not queue mypy probes for unittest asserts, so assertIsInstance/
@@ -474,12 +475,9 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
             if f is None or f == "QUEUED":
                 # f is None → genuinely nonredundant. "QUEUED" → a probe was
                 # appended to the throwaway list and can never resolve, so it
-                # is nonredundant too, NOT a finding — nothing type-guaranteed
-                # slips through as deletable="safe".
+                # is nonredundant too.
                 rec.nonredundant += 1
             else:
-                f.deletable = "report-only"   # stage 1: never auto-delete
-                f.reason += " (unittest assert-method — auto-fix not yet supported)"
                 rec.findings.append(f)
 
     tests_in(tree.body, os.path.relpath(path, root))
