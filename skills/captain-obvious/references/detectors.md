@@ -7,6 +7,11 @@ the script never auto-removes, a hint for the agent's adjudication step:
 `aggressive` (usually a deletion once confirmed) or `report-only` (usually
 needs a rewrite, not a deletion).
 
+The TS scanner additionally attaches an optional `snippet` field (first 160
+chars of the flagged statement) to findings that reference a concrete
+statement; the Python scanner does not emit it — consumers must treat it as
+optional.
+
 ## Categories
 
 | Category | What it catches | Level |
