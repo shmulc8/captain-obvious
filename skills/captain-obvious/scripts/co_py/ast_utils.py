@@ -6,6 +6,32 @@ ASSERT_NAME_RE = re.compile(r"^(assert|expect|verify|check|should)", re.I)
 MUST_NOT_RAISE_RE = re.compile(
     r"(not?[_ ]raise|noop|no[_ ]op|silent|swallow|graceful|does[_ ]not[_ ]throw)", re.I)
 
+def split_lines_keepends(text: str) -> list[str]:
+    r"""Split on \n / \r\n / \r ONLY — the exact line terminators the ast
+    module counts — keeping the terminator on each line. str.splitlines()
+    also splits on \f, \v, \x1c-\x1e, \x85,  ,  , which ast
+    does not, so indexing splitlines() output by ast line numbers corrupts
+    files containing those bytes."""
+    lines = []
+    start = i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            lines.append(text[start:i + 1])
+            i += 1
+            start = i
+        elif c == "\r":
+            j = i + 2 if i + 1 < n and text[i + 1] == "\n" else i + 1
+            lines.append(text[start:j])
+            i = j
+            start = i
+        else:
+            i += 1
+    if start < n:
+        lines.append(text[start:])
+    return lines
+
 def call_name(node: ast.Call) -> str | None:
     f = node.func
     if isinstance(f, ast.Name):

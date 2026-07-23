@@ -3,6 +3,7 @@ import ast
 import os
 
 from .models import TestRecord, Finding
+from .ast_utils import split_lines_keepends
 
 def _dangling_edits(rec, removed_nodes, lines):
     removed_ids = {id(n) for n in removed_nodes}
@@ -26,10 +27,12 @@ def _dangling_edits(rec, removed_nodes, lines):
         if v not in newly_unused:
             continue
         rhs = stmt.value
-        indent = " " * (len(lines[stmt.lineno - 1]) - len(lines[stmt.lineno - 1].lstrip()))
+        src_line = lines[stmt.lineno - 1]
+        indent = " " * (len(src_line) - len(src_line.lstrip()))
+        eol = "\r\n" if src_line.endswith("\r\n") else ("\r" if src_line.endswith("\r") else "\n")
         if rhs is not None and any(isinstance(n, ast.Call) for n in ast.walk(rhs)):
             try:
-                text = indent + " ".join(ast.unparse(rhs).split()) + "\n"
+                text = indent + " ".join(ast.unparse(rhs).split()) + eol
             except Exception:
                 continue
             edits.append((stmt.lineno, stmt.end_lineno, text))
@@ -51,7 +54,8 @@ def plan_removals(records: list[TestRecord], root: str):
 
     def lines_of(f):
         if f not in file_lines:
-            file_lines[f] = open(f, encoding="utf-8").read().splitlines(keepends=True)
+            file_lines[f] = split_lines_keepends(
+                open(f, encoding="utf-8", newline="").read())
         return file_lines[f]
 
     def want(f: Finding) -> bool:
@@ -115,7 +119,8 @@ def apply_fix(records: list[TestRecord], root: str):
 
     def lines_of(f):
         if f not in file_lines:
-            file_lines[f] = open(f, encoding="utf-8").read().splitlines(keepends=True)
+            file_lines[f] = split_lines_keepends(
+                open(f, encoding="utf-8", newline="").read())
         return file_lines[f]
 
     files_changed = 0
@@ -135,7 +140,7 @@ def apply_fix(records: list[TestRecord], root: str):
                 new.append(replace[i])
             elif i not in drop:
                 new.append(l)
-        with open(file, "w", encoding="utf-8") as fh:
+        with open(file, "w", encoding="utf-8", newline="") as fh:
             fh.writelines(new)
         files_changed += 1
     return {"testsRemoved": len(plan["testsToRemove"]),

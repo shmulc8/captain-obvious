@@ -12,6 +12,7 @@ from .ast_utils import (
     is_assertionish_call,
     has_pytest_raises,
     silent_handler,
+    split_lines_keepends,
     HelperIndex,
     MUST_NOT_RAISE_RE,
     ASSERT_NAME_RE,
@@ -485,8 +486,9 @@ def classify_assert(a: ast.Assert, fn, stubs, file_has_cast, const_map=None,
     # type probes (filled in by the mypy pass)
     if path is not None and probes is not None:
         try:
-            lines = open(path, encoding="utf-8").read().splitlines()
-            indent = len(lines[a.lineno - 1]) - len(lines[a.lineno - 1].lstrip())
+            lines = split_lines_keepends(open(path, encoding="utf-8", newline="").read())
+            raw = lines[a.lineno - 1].rstrip("\r\n")
+            indent = len(raw) - len(raw.lstrip())
         except Exception:
             indent = 0
 
