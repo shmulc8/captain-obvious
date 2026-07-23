@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ast
 import os
+import sys
 
 from .models import TestRecord, Finding
 from .ast_utils import split_lines_keepends
@@ -125,6 +126,11 @@ def apply_fix(records: list[TestRecord], root: str):
 
     files_changed = 0
     for file, spans in edits_by_file.items():
+        if os.path.islink(file):
+            print(f"captain-obvious: skipping {file} — symlinked test files "
+                  "are never rewritten (the write would follow the link)",
+                  file=sys.stderr)
+            continue
         if not spans:
             continue
         lines = lines_of(file)

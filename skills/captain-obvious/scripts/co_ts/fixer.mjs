@@ -77,6 +77,10 @@ export function decideRemovals(ts, testRecords, doFix, report, fs, projectDir) {
     }
     let filesChanged = 0;
     for (const [file, edits] of editsByFile) {
+      if (fs.lstatSync(file).isSymbolicLink()) {
+        console.error(`captain-obvious: skipping ${file} — symlinked test files are never rewritten (the write would follow the link)`);
+        continue;
+      }
       let text = fs.readFileSync(file, 'utf8');
       edits.sort((a, b) => b.start - a.start);
       for (const e of edits) text = text.slice(0, e.start) + text.slice(e.end);

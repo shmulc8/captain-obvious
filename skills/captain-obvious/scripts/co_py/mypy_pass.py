@@ -157,6 +157,10 @@ def run_mypy_probes(probes: list[Probe], root: str,
             out_lines.extend(src_lines[li:])
             shadow = os.path.join(os.path.dirname(file),
                                   SHADOW_PREFIX + os.path.basename(file))
+            if os.path.islink(shadow):
+                # a pre-existing symlink under the shadow name would be
+                # written through — skip this file's probes instead
+                continue
             with open(shadow, "w", encoding="utf-8") as f:
                 f.write("\n".join(out_lines) + "\n")
             shadow_files.append(shadow)
