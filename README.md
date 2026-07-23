@@ -31,7 +31,9 @@ the tools that already know:
 
 - **TypeScript**: the project's own compiler API answers "what is the static
   type of this expression?" — if `typeof result === 'number'` is a fact of the
-  type, the assertion is not a test.
+  type, the assertion is not a test. Plain-JS test files (`.test.js` etc.) get
+  the syntactic categories; `type-guaranteed` needs TypeScript (or stays off
+  without `checkJs`).
 - **Python**: batched `mypy reveal_type` probes (one mypy run for the whole
   repo) answer the same for `isinstance(...)` and `is not None`.
 - **AST passes** catch the rest: tautologies, mock-echo tests, assertions after
@@ -128,12 +130,37 @@ the spot.
   [`skills/captain-obvious/references/prevention.md`](skills/captain-obvious/references/prevention.md)
   into your `CLAUDE.md` instead.
 
+### CI gate (`--check --base <ref>`)
+
+The write-time hook only fires inside an agent session. `--check --base <ref>`
+is the **CI twin** of that hook — a correctness gate on *new* dead tests, not a
+CI-time coverage optimizer. It is report-only (never writes; `--check --fix` is
+rejected) and exits **1 only when a proven *syntactic* finding is newly
+introduced vs `<ref>`** in a changed test file — pre-existing findings never
+gate, and it excludes type-guaranteed findings (the base-side scan is
+syntactic-only). Any git trouble other than "file absent in base" (bad ref,
+shallow clone, diff failure) **fails open**: a `captain-obvious:` note to stderr
+and exit 0, so the tool can never invent a CI failure.
+
+```yaml
+# .github/workflows/captain-obvious.yml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }        # need history to diff against the base
+- uses: <owner>/captain-obvious@main
+  with:
+    base: ${{ github.event.pull_request.base.sha }}   # default: origin/main
+```
+
+A `.pre-commit-hooks.yaml` (`id: captain-obvious-check`, `--base HEAD`) ships
+for pre-commit users. Both wrappers run `--no-types` for speed and syntactic
+parity with the comparison.
+
 ## 🔍 Detector catalog
 
 | Category | Example | Level |
 |---|---|---|
 | `type-guaranteed` | `expect(typeof f()).toBe('number')` when `f(): number`; `assert x is not None` on non-Optional | proven |
-| `constant-assert` | `expect(true).toBe(true)`, `assert x == x` | proven |
+| `constant-assert` | `expect(true).toBe(true)`, `assert x == x` (incl. `self.assertEqual(1, 1)`-style unittest assert-methods, report-only) | proven |
 | `boundary-tautology` | `expect(arr.length).toBeGreaterThanOrEqual(0)` | proven |
 | `local-const-echo` | `const expected = 5; expect(expected).toBe(5)` | proven |
 | `mock-echo` | stub returns 5 → assert it returns 5 | proven / advisory |

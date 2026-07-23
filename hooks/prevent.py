@@ -30,7 +30,7 @@ TS_CLI = os.path.join(SCRIPTS, "captain_obvious_ts.mjs")
 
 # mirror the scanners' own discovery rules
 PY_TEST_RE = re.compile(r"(^|[\\/])(test_[^\\/]*\.py|[^\\/]*_test\.py)$")
-TS_TEST_RE = re.compile(r"\.(test|spec)\.(ts|tsx|mts|cts)$|[\\/]__tests__[\\/][^\\/]*\.(ts|tsx)$")
+TS_TEST_RE = re.compile(r"\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$|[\\/]__tests__[\\/][^\\/]*\.(ts|tsx|js|jsx)$")
 SHADOW_PREFIX = "_cap_obv_shadow_"
 MAX_BYTES = 1_000_000
 SCAN_TIMEOUT = 5

@@ -1,0 +1,14 @@
+name: captain-obvious check
+description: Fail if the PR introduces proven can-never-fail tests (report-only)
+inputs:
+  path:
+    default: "."
+  base:
+    default: "origin/main"
+runs:
+  using: composite
+  steps:
+    - run: python3 "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_py.py" --path "${{ inputs.path }}" --no-types --check --base "${{ inputs.base }}"
+      shell: bash
+    - run: node "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_ts.mjs" --project "${{ inputs.path }}" --check --base "${{ inputs.base }}"
+      shell: bash

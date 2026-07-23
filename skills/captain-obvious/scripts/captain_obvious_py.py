@@ -11,6 +11,8 @@ import argparse
 import ast
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 from co_py.discovery import find_test_files
@@ -59,6 +61,88 @@ def single_file(args) -> int:
     return 0
 
 
+def run_check(base: str, root: str, findings: list[dict]) -> int:
+    """Report-only CI gate (plan 011): exit 1 iff a proven *syntactic* finding
+    is newly introduced (present now, absent in `base`) in a file changed vs
+    `base`. Every git failure other than 'file absent in base' fails OPEN
+    (stderr note + exit 0) — a gate must never invent a CI failure.
+
+    Base-vs-current findings are keyed on (category, test) — the exact key
+    hooks/prevent.py uses (line numbers shift across edits). Shared BY
+    CONVENTION; if one keying changes, change both.
+    """
+    def git(*a, cwd, text=True):
+        return subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=text)
+
+    def fail_open(msg: str) -> int:
+        print(f"captain-obvious: --check could not compare against {base} "
+              f"({msg}) — treating as clean (fail-open)", file=sys.stderr)
+        return 0
+
+    def clean() -> int:
+        print(f"captain-obvious: --check clean — no newly-introduced proven "
+              f"findings vs {base}", file=sys.stderr)
+        return 0
+
+    if shutil.which("git") is None:
+        return fail_open("git not found on PATH")
+
+    top = git("rev-parse", "--show-toplevel", cwd=root)
+    if top.returncode != 0:
+        return fail_open((top.stderr.strip().splitlines() or ["not a git repository"])[0])
+    repo = os.path.realpath(top.stdout.strip())
+
+    # invalid ref → fail open; a valid ref with a file merely absent means NEW
+    if git("cat-file", "-e", base, cwd=repo).returncode != 0:
+        return fail_open(f"no such ref {base}")
+
+    diff = git("diff", "--name-only", f"{base}...HEAD", cwd=repo)
+    if diff.returncode != 0:
+        return fail_open((diff.stderr.strip().splitlines() or ["git diff failed"])[0])
+    # realpath both sides: on macOS `git` yields /private/var while abspath keeps
+    # the /var symlink — un-normalized, the intersection would be silently empty
+    changed = {os.path.realpath(os.path.join(repo, p)) for p in diff.stdout.splitlines()}
+
+    def absfile(f) -> str:
+        return os.path.realpath(os.path.join(root, f["file"]))
+
+    # syntactic proven only: the base-side scan is single-file (no mypy, no
+    # coverage), so categories whose proven status depends on either —
+    # type-guaranteed (mypy) and coverage-promoted conditional-assert — can
+    # never appear proven on the base side and would over-fire the gate
+    candidates = [f for f in findings
+                  if f["level"] == "proven"
+                  and f["category"] not in ("type-guaranteed", "conditional-assert")
+                  and absfile(f) in changed]
+    if not candidates:
+        return clean()
+
+    seen_by_file: dict[str, set] = {}
+    for abs_f in {absfile(f) for f in candidates}:
+        rel = os.path.relpath(abs_f, repo).replace(os.sep, "/")
+        show = git("show", f"{base}:{rel}", cwd=repo, text=False)
+        if show.returncode != 0:
+            seen_by_file[abs_f] = set()       # absent in base → the whole file is NEW
+            continue
+        scan = subprocess.run([sys.executable, __file__, "--file", abs_f, "--stdin"],
+                              input=show.stdout, capture_output=True)
+        try:
+            base_findings = json.loads(scan.stdout)["findings"]
+        except (ValueError, KeyError):
+            return fail_open(f"base scan of {rel} failed")
+        seen_by_file[abs_f] = {(f["category"], f["test"]) for f in base_findings
+                               if f.get("level") == "proven"}
+
+    new = [f for f in candidates
+           if (f["category"], f["test"]) not in seen_by_file[absfile(f)]]
+    if not new:
+        return clean()
+    for f in new:
+        print(f'captain-obvious: NEW proven finding: {f["file"]}:{f["line"]} '
+              f'({f["category"]}) "{f["test"]}" — {f["reason"]}', file=sys.stderr)
+    return 1
+
+
 def main():
     if sys.version_info < (3, 9):
         print("captain-obvious: requires Python 3.9+ (this is Python "
@@ -80,8 +164,17 @@ def main():
                                        "confirm conditional-assert findings against real line coverage")
     ap.add_argument("--force", action="store_true",
                     help="allow --fix on a dirty or non-git tree (no undo path)")
+    ap.add_argument("--check", action="store_true",
+                    help="exit 1 if any proven syntactic finding is newly introduced "
+                         "vs --base (report-only; implies no writes)")
+    ap.add_argument("--base", default=None,
+                    help="git ref to compare against for --check (e.g. origin/main)")
     args = ap.parse_args()
 
+    if args.check and args.fix:
+        ap.error("--check is report-only — it cannot be combined with --fix")
+    if args.check and not args.base:
+        ap.error("--check requires --base <ref>")
     if args.stdin and not args.file:
         ap.error("--stdin requires --file")
     if args.file:
@@ -218,6 +311,8 @@ def main():
         print(f"\nFixed: removed {fixed['testsRemoved']} tests and {fixed['assertionsRemoved']} assertions "
               f"across {fixed['filesChanged']} files.")
         print("Re-run your typechecker and test suite now.")
+    if args.check:
+        return run_check(args.base, root, report["findings"])
     return 0
 
 

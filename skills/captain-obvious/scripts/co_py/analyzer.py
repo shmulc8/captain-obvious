@@ -36,6 +36,48 @@ def _is_noise_call(node: ast.Call) -> bool:
     return False
 
 
+_UNITTEST_EQ = {"assertEqual", "assertIs"}
+_UNITTEST_TRUE = {"assertTrue"}
+_UNITTEST_ISINSTANCE = {"assertIsInstance"}
+_UNITTEST_NONE = {"assertIsNone", "assertIsNotNone"}
+
+def _unittest_call_to_assert(call: ast.Call) -> ast.Assert | None:
+    """Map self.assert<X>(...) to an equivalent synthetic ast.Assert whose
+    .test mirrors the bare-assert form, so classify_assert and the mypy
+    probe queue can reason about it. Returns None for unrecognized shapes.
+    The synthetic node copies the call's location so findings and probes
+    point at the real line. A msg= extra positional/keyword arg trips the
+    len(args) checks and simply skips the call — acceptable conservatism."""
+    if not (isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "self"):
+        return None
+    name = call.func.attr
+    args = call.args
+    t = None
+    if name in _UNITTEST_EQ and len(args) == 2:
+        t = ast.Compare(left=args[0],
+                        ops=[ast.Eq() if name == "assertEqual" else ast.Is()],
+                        comparators=[args[1]])
+    elif name in _UNITTEST_TRUE and len(args) == 1:
+        t = args[0]
+    elif name in _UNITTEST_ISINSTANCE and len(args) == 2:
+        t = ast.Call(func=ast.Name(id="isinstance", ctx=ast.Load()),
+                     args=[args[0], args[1]], keywords=[])
+    elif name in _UNITTEST_NONE and len(args) == 1:
+        cmp_op = ast.Is() if name == "assertIsNone" else ast.IsNot()
+        t = ast.Compare(left=args[0], ops=[cmp_op],
+                        comparators=[ast.Constant(value=None)])
+    if t is None:
+        return None
+    a = ast.Assert(test=t, msg=None)
+    for n in ast.walk(a):
+        ast.copy_location(n, call)
+    ast.copy_location(a, call)
+    a.end_lineno = call.end_lineno
+    return a
+
+
 def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                  probes: list[Probe], records: list[TestRecord]):
     helpers = HelperIndex(tree)
@@ -257,6 +299,7 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
                         loop_gated_asserts.add(id(x))
 
         plain_live_asserts = []
+        unittest_asserts = []
         for a in live:
             gated = False
             ts = top_stmt_of(a)
@@ -278,7 +321,14 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
             elif isinstance(a, ast.Assert) and ts is a:
                 plain_live_asserts.append(a)
             else:
-                rec.nonredundant += 1  # helper call, with-raises, self.assertX handled below, etc.
+                synth = None
+                if isinstance(a, ast.Call) and ts is not None \
+                        and isinstance(ts, ast.Expr) and ts.value is a:
+                    synth = _unittest_call_to_assert(a)
+                if synth is not None:
+                    unittest_asserts.append(synth)
+                else:
+                    rec.nonredundant += 1  # helper call, with-raises, etc.
 
         rec.live_assert_count = len(plain_live_asserts)
 
@@ -412,6 +462,24 @@ def analyze_file(path: str, src: str, tree: ast.Module, root: str,
             elif f == "QUEUED":
                 pass  # a mypy probe will resolve this one (or count it nonredundant)
             else:
+                rec.findings.append(f)
+
+        # -- classify recognized unittest assert-methods (report-only stage)
+        for a in unittest_asserts:
+            # throwaway probe list ([], NOT the real `probes`): this stage does
+            # not queue mypy probes for unittest asserts, so assertIsInstance/
+            # assertIsNotNone produce no finding here — see plan 009's Decision.
+            f = classify_assert(a, fn, stubs, fn_has_cast(fn), const_map,
+                                bare_mocks, path, [])
+            if f is None or f == "QUEUED":
+                # f is None → genuinely nonredundant. "QUEUED" → a probe was
+                # appended to the throwaway list and can never resolve, so it
+                # is nonredundant too, NOT a finding — nothing type-guaranteed
+                # slips through as deletable="safe".
+                rec.nonredundant += 1
+            else:
+                f.deletable = "report-only"   # stage 1: never auto-delete
+                f.reason += " (unittest assert-method — auto-fix not yet supported)"
                 rec.findings.append(f)
 
     tests_in(tree.body, os.path.relpath(path, root))

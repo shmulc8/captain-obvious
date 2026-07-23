@@ -63,6 +63,15 @@ def plan_removals(records: list[TestRecord], root: str):
         return f.deletable == "safe"
 
     for rec in records:
+        if os.path.islink(rec.file):
+            # never plan a removal in a symlinked test file — the write would
+            # follow the link out of the scanned tree. Excluding it here (not
+            # just at the write) keeps the reported counts and the --json plan
+            # preview honest about what --fix will actually touch.
+            print(f"captain-obvious: skipping {rec.file} — symlinked test files "
+                  "are never rewritten (the write would follow the link)",
+                  file=sys.stderr)
+            continue
         whole = False
         if rec.is_duplicate and any(f.category == "duplicate-test" and want(f) for f in rec.findings):
             whole = True
@@ -126,11 +135,6 @@ def apply_fix(records: list[TestRecord], root: str):
 
     files_changed = 0
     for file, spans in edits_by_file.items():
-        if os.path.islink(file):
-            print(f"captain-obvious: skipping {file} — symlinked test files "
-                  "are never rewritten (the write would follow the link)",
-                  file=sys.stderr)
-            continue
         if not spans:
             continue
         lines = lines_of(file)

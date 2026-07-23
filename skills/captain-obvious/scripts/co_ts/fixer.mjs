@@ -6,6 +6,14 @@ export function decideRemovals(ts, testRecords, doFix, report, fs, projectDir) {
   const removableStmts = [];
 
   for (const rec of testRecords) {
+    // never plan a removal in a symlinked test file — the write would follow
+    // the link out of the scanned tree. Excluding it here (not just at the
+    // write) keeps report.fixed counts and report.plan honest about what --fix
+    // will actually touch.
+    if (fs.lstatSync(rec.sf.fileName).isSymbolicLink()) {
+      console.error(`captain-obvious: skipping ${rec.sf.fileName} — symlinked test files are never rewritten (the write would follow the link)`);
+      continue;
+    }
     const wants = (f) => f.deletable === 'safe';
 
     if (rec.isDuplicate && wants(rec.findings.find(f => f.category === 'duplicate-test'))) {
@@ -77,10 +85,6 @@ export function decideRemovals(ts, testRecords, doFix, report, fs, projectDir) {
     }
     let filesChanged = 0;
     for (const [file, edits] of editsByFile) {
-      if (fs.lstatSync(file).isSymbolicLink()) {
-        console.error(`captain-obvious: skipping ${file} — symlinked test files are never rewritten (the write would follow the link)`);
-        continue;
-      }
       let text = fs.readFileSync(file, 'utf8');
       edits.sort((a, b) => b.start - a.start);
       for (const e of edits) text = text.slice(0, e.start) + text.slice(e.end);

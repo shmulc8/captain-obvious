@@ -140,6 +140,7 @@ def run_mypy_probes(probes: list[Probe], root: str,
 
     shadow_map = {}   # shadow_path -> {shadow_line: probe}
     shadow_files = []
+    skipped_shadow = []   # basenames skipped due to a pre-existing shadow symlink
     try:
         for file, plist in by_file.items():
             src_lines = [l.rstrip("\r\n") for l in split_lines_keepends(
@@ -159,7 +160,9 @@ def run_mypy_probes(probes: list[Probe], root: str,
                                   SHADOW_PREFIX + os.path.basename(file))
             if os.path.islink(shadow):
                 # a pre-existing symlink under the shadow name would be
-                # written through — skip this file's probes instead
+                # written through — skip this file's probes instead, and
+                # record it so the skip is not silent (see note below)
+                skipped_shadow.append(os.path.basename(file))
                 continue
             with open(shadow, "w", encoding="utf-8") as f:
                 f.write("\n".join(out_lines) + "\n")
@@ -248,6 +251,13 @@ def run_mypy_probes(probes: list[Probe], root: str,
             note = ("no source packages or top-level modules found under the project root — "
                     "mypy cannot see the code under test, so the Any-laundering guard is "
                     "unavailable; type-guaranteed findings demoted to advisory")
+        if skipped_shadow:
+            # don't let the islink skip vanish silently — every other
+            # degradation in this module says so
+            skip_note = (f"{len(skipped_shadow)} file(s) skipped for type-guaranteed "
+                         f"checks — a pre-existing shadow symlink "
+                         f"({', '.join(sorted(skipped_shadow))})")
+            note = f"{note}; {skip_note}" if note else skip_note
         return note, propagate_laundering(root, seed), laundering_visible
     except OSError as e:
         # e.g. read-only checkout: shadow files cannot be written next to the

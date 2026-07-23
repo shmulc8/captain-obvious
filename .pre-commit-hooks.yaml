@@ -1,0 +1,5 @@
+- id: captain-obvious-check
+  name: captain-obvious (new proven dead tests)
+  entry: python3 skills/captain-obvious/scripts/captain_obvious_py.py --no-types --check --base HEAD --path .
+  language: system
+  pass_filenames: false

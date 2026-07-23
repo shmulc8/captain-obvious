@@ -35,28 +35,43 @@ def _ts_resolvable() -> bool:
     return probe.returncode == 0
 
 
-def _main_checks_version_info(path: str) -> bool:
+def _main_guards_below(path: str, floor: tuple[int, int]) -> bool:
+    """True iff main() contains `sys.version_info < <floor>` — pins the
+    comparison DIRECTION (Lt) and THRESHOLD, not just that version_info is
+    mentioned, so a flipped `>` or a wrong `(3, 0)` would fail this check."""
     tree = ast.parse(open(path, encoding="utf-8").read())
     for fn in ast.walk(tree):
         if isinstance(fn, ast.FunctionDef) and fn.name == "main":
             for n in ast.walk(fn):
-                if isinstance(n, ast.Attribute) and n.attr == "version_info":
-                    return True
+                if (isinstance(n, ast.Compare)
+                        and isinstance(n.left, ast.Attribute)
+                        and n.left.attr == "version_info"
+                        and len(n.ops) == 1 and isinstance(n.ops[0], ast.Lt)
+                        and isinstance(n.comparators[0], ast.Tuple)):
+                    vals = [e.value for e in n.comparators[0].elts
+                            if isinstance(e, ast.Constant)]
+                    if tuple(vals[:2]) == floor:
+                        return True
     return False
 
 
 class PythonFloorGuard(unittest.TestCase):
-    def test_cli_main_guards_version(self):
-        self.assertTrue(_main_checks_version_info(PY_CLI))
+    def test_cli_main_guards_below_39(self):
+        self.assertTrue(_main_guards_below(PY_CLI, (3, 9)))
 
-    def test_hook_main_guards_version(self):
-        self.assertTrue(_main_checks_version_info(HOOK))
+    def test_hook_main_guards_below_39(self):
+        self.assertTrue(_main_guards_below(HOOK, (3, 9)))
 
 
 class TsFloorGuard(unittest.TestCase):
     def test_source_has_floor_message(self):
         src = open(TS_CLI, encoding="utf-8").read()
         self.assertIn("unsupported typescript version", src)
+
+    def test_floor_threshold_and_direction(self):
+        # pin `tsMajor < 4` — a flipped `>` or a wrong threshold would fail here
+        src = open(TS_CLI, encoding="utf-8").read()
+        self.assertRegex(src, r"tsMajor\s*<\s*4\b")
 
 
 @unittest.skipUnless(_ts_resolvable(), "node + typescript not available")
