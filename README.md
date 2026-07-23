@@ -104,6 +104,8 @@ already emits.
 > repo's own `typescript` package. Treat scanning like running the repo's
 > type checker: only do it on code you trust.
 
+Requires Python ≥ 3.9 for the Python scanner and hook; the TS scanner uses the target repo's own `typescript` and requires ≥ 4.0.
+
 ## 🛡️ Prevention (write-time hook)
 
 Removing dead tests after the fact pays for them twice — once to write them,
@@ -139,6 +141,7 @@ the spot.
 | `missed-fail` | a forced-fail marker (`pytest.fail()` / `throw new Error`) stuck in dead code — can never fire | proven |
 | `missed-skip` | a conditional early `return`/`skip` above the asserts — if it fires, they never run | advisory |
 | `duplicate-test` | identical body in the same suite | proven |
+| `silent-smoke` | assertion-free test whose every call is silently try/caught — or that contains no calls at all — it can do nothing and can never fail | proven |
 | `no-assert` | no assertion anywhere — a **smoke test** (legit by design, per ICSE '19), surfaced not deleted | advisory |
 | `conditional-assert` | assertion gated behind `if` — rotten green (ICSE '19) | advisory |
 | `floating-async-assert` | unawaited `expect(p).rejects...` (silent pass under Jest) | advisory |

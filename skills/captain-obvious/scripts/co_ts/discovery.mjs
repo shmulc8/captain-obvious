@@ -18,5 +18,5 @@ export function findTestFiles(root) {
       }
     }
   })(root);
-  return found;
+  return found.sort();
 }

@@ -7,12 +7,18 @@ the script never auto-removes, a hint for the agent's adjudication step:
 `aggressive` (usually a deletion once confirmed) or `report-only` (usually
 needs a rewrite, not a deletion).
 
+The TS scanner additionally attaches an optional `snippet` field (first 160
+chars of the flagged statement) to findings that reference a concrete
+statement; the Python scanner does not emit it — consumers must treat it as
+optional.
+
 ## Categories
 
 | Category | What it catches | Level |
 |---|---|---|
 | `type-guaranteed` | Assertion re-checks a fact the type checker proves: `expect(typeof f()).toBe('number')`, `toBeDefined()`/`not.toBeNull()` on non-nullable types, `toBeInstanceOf` on nominal classes, `toBeTruthy` on object types, `Array.isArray` on arrays, `expect.any(Ctor)`/`expect.anything()`, `toHaveProperty` on required props; Python: `assert isinstance(x, T)` / `assert x is not None` / `type(x) is T` checked against mypy `reveal_type` | proven / advisory |
 | `constant-assert` | Tautologies: `expect(true).toBe(true)`, `assert 1 == 1`, `expect(x).toBe(x)`, `assert x == x` on side-effect-free chains | proven |
+| `silent-smoke` | Assertion-free test that cannot even fail by raising: every call it makes is wrapped in a `try`/`except`-`pass` (the handler absorbs any raise), or the body contains no calls at all. Unlike `no-assert` — a legitimate smoke test whose unguarded calls still fail the test on raise — a silent-smoke test has no failure path whatsoever | proven |
 | `no-assert` | No assertion anywhere in the test. Per *Rotten Green Tests* (ICSE '19) this is a **smoke test** — legitimate by design (it verifies the code runs without throwing), **not** a rotten test. Surfaced (never a delete candidate) only so a human can spot the rare case where an assertion was clearly intended but forgotten | advisory, report-only |
 | `mock-echo` | Test asserts the mock does what it was just stubbed to do: `m.mockReturnValue(5); expect(m()).toBe(5)`, or calls `m()` then asserts `toHaveBeenCalled()` | proven (direct) / advisory (indirect) |
 | `duplicate-test` | Body identical to an earlier test. **Same file + same class/describe scope → proven** (auto-deletable). **Different file or scope → advisory** (surfaced only — a shared body can behave differently under a different conftest/fixture set or `beforeEach`, so a human picks which to keep). Comparison is comment/formatting-insensitive but **literal-sensitive** (whitespace *inside* a string/template literal counts), so whitespace-handling tests are not merged. When two identical-bodied tests' names materially diverge, the finding is flagged as a likely copy-paste bug that leaves the named behaviour untested | proven / advisory |

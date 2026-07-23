@@ -75,6 +75,8 @@ def compose_new_content(tool: str, ti: dict, old: str) -> str | None:
 
 
 def main() -> None:
+    if sys.version_info < (3, 9):
+        return
     data = json.load(sys.stdin)
     mode = os.environ.get("CAPTAIN_OBVIOUS_HOOK", "off").strip().lower()
     if mode not in ("block", "warn"):

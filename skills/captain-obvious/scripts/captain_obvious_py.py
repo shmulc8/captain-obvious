@@ -60,6 +60,11 @@ def single_file(args) -> int:
 
 
 def main():
+    if sys.version_info < (3, 9):
+        print("captain-obvious: requires Python 3.9+ (this is Python "
+              f"{sys.version_info.major}.{sys.version_info.minor}; ast.unparse is missing below 3.9)",
+              file=sys.stderr)
+        return 2
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", default=".")
     ap.add_argument("--file", help="scan a single file (syntactic categories only; "

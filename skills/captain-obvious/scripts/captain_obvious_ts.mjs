@@ -79,6 +79,12 @@ if (!ts || !ts.sys) {
   process.exit(2);
 }
 
+const tsMajor = parseInt(String(ts.version ?? '0').split('.')[0], 10);
+if (!Number.isFinite(tsMajor) || tsMajor < 4) {
+  console.error(`captain-obvious: unsupported typescript version ${ts.version} loaded from ${projectDir} — need >= 4.0. Upgrade the project's typescript or run with a newer one installed.`);
+  process.exit(2);
+}
+
 // ------------------------------------------------------------- single file
 // Syntactic-only scan of one file, JSON to stdout. Built for write-time
 // hooks: no Program, no TypeChecker, no tsconfig — a pure (tolerant) parse,

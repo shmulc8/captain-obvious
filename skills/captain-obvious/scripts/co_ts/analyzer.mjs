@@ -31,6 +31,30 @@ export function isOutermostAssertCall(ts, n) {
   return true;
 }
 
+export function isNoiseCall(ts, expr) {
+  let curr = expr;
+  while (curr) {
+    if (ts.isCallExpression(curr) || ts.isNewExpression(curr)) {
+      curr = curr.expression;
+    } else if (ts.isPropertyAccessExpression(curr)) {
+      const name = curr.name.text;
+      if (name === 'console' || name === 'log' || name === 'logger' || name === 'logging') return true;
+      curr = curr.expression;
+    } else if (ts.isElementAccessExpression(curr) || ts.isNonNullExpression(curr) ||
+               ts.isAwaitExpression(curr) || ts.isParenthesizedExpression(curr)) {
+      curr = curr.expression;
+    } else if (ts.isIdentifier(curr)) {
+      const text = curr.text;
+      return text === 'console' || text === 'log' || text === 'logger' || text === 'logging';
+    } else if (curr.kind === ts.SyntaxKind.ThisKeyword) {
+      return false;
+    } else {
+      break;
+    }
+  }
+  return false;
+}
+
 export function isTestBlock(ts, stmt) {
   if (!ts.isExpressionStatement(stmt) || !ts.isCallExpression(stmt.expression)) return null;
   const c = stmt.expression;
@@ -173,35 +197,12 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
   }
 
   if (realAsserts.length === 0) {
-    const isNoiseCall = (expr) => {
-      let curr = expr;
-      while (curr) {
-        if (ts.isCallExpression(curr) || ts.isNewExpression(curr)) {
-          curr = curr.expression;
-        } else if (ts.isPropertyAccessExpression(curr)) {
-          const name = curr.name.text;
-          if (name === 'console' || name === 'log' || name === 'logger' || name === 'logging') return true;
-          curr = curr.expression;
-        } else if (ts.isElementAccessExpression(curr) || ts.isNonNullExpression(curr) ||
-                   ts.isAwaitExpression(curr) || ts.isParenthesizedExpression(curr)) {
-          curr = curr.expression;
-        } else if (ts.isIdentifier(curr)) {
-          const text = curr.text;
-          return text === 'console' || text === 'log' || text === 'logger' || text === 'logging';
-        } else if (curr.kind === ts.SyntaxKind.ThisKeyword) {
-          return false;
-        } else {
-          break;
-        }
-      }
-      return false;
-    };
 
     let hasCalls = false;
     let allCallsGuarded = true;
     walk(ts, body, n => {
       if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
-        if (!isNoiseCall(n)) {
+        if (!isNoiseCall(ts, n)) {
           hasCalls = true;
           if (!silentlyGuarded.has(n)) {
             allCallsGuarded = false;
@@ -232,36 +233,13 @@ export function analyzeTest(ts, checker, typesAvailable, strictNull, uncheckedIn
     // would drop that signal. A call inside a silently-caught try{} is not
     // such a signal (the catch absorbs the throw), so it doesn't count; nor
     // does the assertion machinery itself, nor console logging.
-    const isNoiseCall = (expr) => {
-      let curr = expr;
-      while (curr) {
-        if (ts.isCallExpression(curr) || ts.isNewExpression(curr)) {
-          curr = curr.expression;
-        } else if (ts.isPropertyAccessExpression(curr)) {
-          const name = curr.name.text;
-          if (name === 'console' || name === 'log' || name === 'logger' || name === 'logging') return true;
-          curr = curr.expression;
-        } else if (ts.isElementAccessExpression(curr) || ts.isNonNullExpression(curr) ||
-                   ts.isAwaitExpression(curr) || ts.isParenthesizedExpression(curr)) {
-          curr = curr.expression;
-        } else if (ts.isIdentifier(curr)) {
-          const text = curr.text;
-          return text === 'console' || text === 'log' || text === 'logger' || text === 'logging';
-        } else if (curr.kind === ts.SyntaxKind.ThisKeyword) {
-          return false;
-        } else {
-          break;
-        }
-      }
-      return false;
-    };
     const machinery = assertionMachineryNodes(ts, realAsserts);
     let remnant = false;
     walk(ts, body, n => {
       if (remnant) return;
       if (!ts.isCallExpression(n) && !ts.isNewExpression(n)) return;
       if (machinery.has(n) || silentlyGuarded.has(n)) return;
-      if (isNoiseCall(n.expression)) return;
+      if (isNoiseCall(ts, n.expression)) return;
       const top = topStatementOf(n);
       if (top && unreachableStmts.has(top)) return;
       remnant = true;
