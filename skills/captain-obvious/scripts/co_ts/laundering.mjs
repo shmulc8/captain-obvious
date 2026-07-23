@@ -1,7 +1,8 @@
 import { walk, hasUnsafeCast } from './ast_utils.mjs';
 import { resolveSymbol } from './type_predicates.mjs';
 
-export function callLaunders(ts, checker, callExpr) {
+export function callLaunders(ts, checker, callExpr, seen = new Set(), depth = 0) {
+  if (depth > 5) return true;            // deep chain: refuse to prove — stay safe
   let sym = checker.getSymbolAtLocation(callExpr.expression);
   sym = resolveSymbol(ts, checker, sym);
   const decl = (sym?.declarations ?? []).find(d =>
@@ -13,12 +14,17 @@ export function callLaunders(ts, checker, callExpr) {
       ts.isFunctionExpression(sym.valueDeclaration.initializer))
       ? sym.valueDeclaration.initializer : null);
   if (!decl || !decl.body || !decl.type) return false;
+  if (seen.has(decl)) return false;      // cycle: no new information
+  seen.add(decl);
   let launders = false;
   walk(ts, decl.body, n => {
     if (launders) return;
     if (ts.isReturnStatement(n) && n.expression) {
       const t = checker.getTypeAtLocation(n.expression);
-      if ((t.flags & ts.TypeFlags.Any) || hasUnsafeCast(ts, n.expression)) launders = true;
+      if ((t.flags & ts.TypeFlags.Any) || hasUnsafeCast(ts, n.expression)) { launders = true; return; }
+      let re = n.expression;
+      while (ts.isAwaitExpression(re) || ts.isParenthesizedExpression(re)) re = re.expression;
+      if (ts.isCallExpression(re) && callLaunders(ts, checker, re, seen, depth + 1)) launders = true;
     }
   });
   return launders;

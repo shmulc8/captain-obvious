@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from .models import Probe, TestRecord, Finding
-from .ast_utils import walk_no_nested_funcs, call_name
+from .ast_utils import walk_no_nested_funcs, call_name, split_lines_keepends
 from .discovery import SKIP_DIRS, SHADOW_PREFIX, is_test_filename
 
 REVEAL_RE = re.compile(r'^(.*?):(\d+):(?:\d+:)?\s*note: Revealed type is "(.*)"\s*$')
@@ -142,7 +142,8 @@ def run_mypy_probes(probes: list[Probe], root: str,
     shadow_files = []
     try:
         for file, plist in by_file.items():
-            src_lines = open(file, encoding="utf-8").read().splitlines()
+            src_lines = [l.rstrip("\r\n") for l in split_lines_keepends(
+                open(file, encoding="utf-8", newline="").read())]
             plist.sort(key=lambda p: p.line)
             out_lines, li, inserted = [], 0, 0
             line_map = {}
@@ -156,6 +157,10 @@ def run_mypy_probes(probes: list[Probe], root: str,
             out_lines.extend(src_lines[li:])
             shadow = os.path.join(os.path.dirname(file),
                                   SHADOW_PREFIX + os.path.basename(file))
+            if os.path.islink(shadow):
+                # a pre-existing symlink under the shadow name would be
+                # written through — skip this file's probes instead
+                continue
             with open(shadow, "w", encoding="utf-8") as f:
                 f.write("\n".join(out_lines) + "\n")
             shadow_files.append(shadow)
