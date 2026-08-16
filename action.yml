@@ -8,7 +8,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - run: python3 "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_py.py" --path "${{ inputs.path }}" --no-types --check --base "${{ inputs.base }}"
+    - run: python3 "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_py.py" --path "$CO_PATH" --no-types --check --base "$CO_BASE"
       shell: bash
-    - run: node "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_ts.mjs" --project "${{ inputs.path }}" --check --base "${{ inputs.base }}"
+      env:
+        CO_PATH: ${{ inputs.path }}
+        CO_BASE: ${{ inputs.base }}
+    - run: node "${{ github.action_path }}/skills/captain-obvious/scripts/captain_obvious_ts.mjs" --project "$CO_PATH" --check --base "$CO_BASE"
       shell: bash
+      env:
+        CO_PATH: ${{ inputs.path }}
+        CO_BASE: ${{ inputs.base }}
