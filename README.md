@@ -60,6 +60,20 @@ It also knows what **not** to flag: `toBeDefined()` on `.find()` results
 (`T | undefined` — a real check), enum contract locks, custom assertion
 helpers, deliberate determinism tests, and "must not raise" contract tests.
 
+## ✍️ Before writing or removing a test
+
+The skill now asks four questions the scanner cannot answer: What observable
+contract does the test protect? What regression would make it fail? Is that
+contract already covered at a stronger boundary? Does the test require a
+production seam used only by tests? For bug regressions, run the test against
+the pre-fix behavior when safe to confirm it fails for the intended reason.
+
+This review catches leads such as copied implementation expectations, source
+greps, and mocks that supply the asserted outcome. They require reading the
+production path and existing tests; none become automatic deletions. See the
+[`authoring gate`](skills/captain-obvious/SKILL.md#authoring-gate) and
+[`prevention examples`](skills/captain-obvious/references/prevention.md).
+
 ## 📊 Real-world results
 
 - Internal repo, ~1,800 pytest tests: **124 lines deleted across 21 files** —
@@ -186,6 +200,6 @@ are in [`references/detectors.md`](skills/captain-obvious/references/detectors.m
 
 - Cannot catch weak-but-executing assertions (`result.length >= 0` is caught,
   `result.length < 1e9` is not) — only mutation testing proves those useless.
-- Cross-file duplicates and coverage-subsumption are out of scope.
+- Cross-file duplicates are advisory-only; coverage-subsumption is out of scope.
 - Dynamically-built assertions are invisible.
 - "Deleted nothing" does not mean "your suite is sound."

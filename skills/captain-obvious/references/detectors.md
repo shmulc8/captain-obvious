@@ -60,7 +60,7 @@ refuse to mark `type-guaranteed` as proven when:
   somewhere in the chain) make `instanceof` provable; otherwise advisory.
 - Python `type(x) is T` is advisory even when types match: a subclass
   instance satisfies the type but fails the identity check.
-- **Annotation laundering** (found by adversarial audit on a real repo): a
+- **Annotation laundering**: a
   function annotated `-> dict[str, Any]` whose body just does
   `return http_client.api_get(...)` where `api_get() -> Any`. The type checker
   trusts the signature, but nothing enforces it at runtime — an isinstance
@@ -75,7 +75,7 @@ refuse to mark `type-guaranteed` as proven when:
   returns an `any`-typed expression or contains a cast in a return.
 - Duplicate detection includes decorators in the test's identity — two
   `@pytest.mark.parametrize` tests can share a body but run different cases.
-- **Literal-sensitive duplicate key** (found by real-repo iteration on langfuse):
+- **Literal-sensitive duplicate key**:
   a naive whitespace-stripped body comparison merges tests that differ only in
   whitespace *inside* a string/template literal — exactly what a template
   whitespace-handling suite looks like (`"{{ name }}"` vs `"{{name}}"`). The TS
@@ -83,7 +83,7 @@ refuse to mark `type-guaranteed` as proven when:
   keeping each token's raw text, so literal contents are significant while
   indentation/comments are not. Python already dumps the AST, which preserves
   string-constant values, so it is immune by construction.
-- **Closure-mutated locals** (found on mlflow): a call-counter
+- **Closure-mutated locals**: a call-counter
   `count = 0; def cb(): nonlocal count; count += 1; …; assert count == 0`
   is not a `local-const-echo` — the assertion is real behavioural coverage that
   the callback did/didn't run. The Python detector counts assignments across the
@@ -162,8 +162,8 @@ the coverage map — rerun coverage over the whole repo to make it bite.
 - **Enum contract locks** (`expect(ExitCode.OK).toBe(0)`): not flagged — one
   side is a real imported symbol, not a literal.
 - **`it.each` / parametrized tables**: skipped entirely.
-- **Same-body tests in different describes**: not duplicates — different
-  `beforeEach` context can make identical bodies test different things.
+- **Same-body tests in different describes**: advisory only, never auto-deleted —
+  different `beforeEach` context can make identical bodies test different things.
 
 ## Grounding
 
@@ -194,8 +194,9 @@ Supporting:
 
 ## Limitations (be honest in reports)
 
-- Cannot catch weak-but-executing assertions (a test asserting `result.length >= 0`);
-  only mutation testing proves those useless.
-- Cross-file duplicate tests and coverage-subsumption are out of scope.
+- Cannot catch weak-but-executing assertions (e.g. `toBeGreaterThan(0)` where the
+  contract is an exact count); only mutation testing proves those useless.
+- Coverage-subsumption is out of scope. Cross-file and cross-scope duplicates are
+  surfaced as advisories only, never auto-deleted.
 - Assertions built dynamically (loops over matcher names, `expect[m]()`) are invisible.
 - "Deleted nothing" does not mean "suite is sound".

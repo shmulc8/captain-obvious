@@ -1,6 +1,6 @@
 ---
 name: captain-obvious
-description: Finds and deletes "Captain Obvious" tests — tests that can never fail or check nothing. It catches assertions the type checker already guarantees (typeof/isinstance/toBeDefined on typed values), assertion-free tests, tautologies (expect(true).toBe(true), assert x == x, len >= 0), arrange-assert echoes (const x = 5; expect(x).toBe(5)), mock-echo tests, unawaited async assertions, dead/swallowed/conditional assertions, overly-broad pytest.raises(Exception), and duplicate test bodies. Use whenever the user wants to clean up a test suite, remove redundant/useless/tautological/AI-generated tests, mentions tests that "never fail" or "test nothing", or says "captain obvious". Works on TypeScript (Jest/Vitest/bun:test) and Python (pytest + mypy). The detection is fully deterministic — always run the bundled scripts, never scan test files one by one yourself.
+description: Audit TypeScript and Python tests for assertions that cannot fail or check nothing, and guide test authoring with a contract and regression gate. Use when writing or changing tests to avoid low-value coverage, or cleaning redundant, tautological, duplicated, or AI-generated tests. Cleanup runs bundled deterministic scanners; authoring guidance needs no scan during red-green TDD.
 ---
 
 # Captain Obvious
@@ -11,17 +11,36 @@ coverage confidence, and can never catch a regression. They are the signature
 of AI-generated test suites (empirical studies find test smells in 38–100% of
 LLM-generated tests).
 
-The heavy lifting is done by two deterministic scripts in `scripts/`. Your job
-is orchestration: run them, interpret the report, clean up the residue, and
-verify nothing broke. **Do not** hand-scan test files or spawn subagents per
-file — one script invocation scans the whole project.
+For cleanup, two deterministic scripts in `scripts/` do the heavy lifting.
+Run them, interpret the report, clean up the residue, and verify nothing broke.
+**Do not** hand-scan test files or spawn subagents per file — one script
+invocation scans the whole project. During test authoring, use the gate below
+without running a cleanup scan.
+
+## Authoring gate
+
+Before adding or changing a test, answer four questions:
+
+1. What observable behavior or independent contract does it protect?
+2. What plausible regression would make it fail for the intended reason?
+3. Is that contract already covered at a stronger boundary? If so, what
+   distinct risk does this test cover?
+4. Does it require a production export, flag, wrapper, or injection hook used
+   only by tests? Can the real entry point be tested instead?
+
+If a new bug regression test can be run safely against the pre-fix baseline,
+verify that it fails for the intended reason and passes with the fix. Use
+`references/prevention.md` for examples of patterns to avoid. A test need not
+contain a direct assertion to be valuable: a deliberate must-not-raise test
+can guard a real contract.
 
 ## Workflow
 
 ### 1. Detect the stack(s)
 
-- TypeScript: a `tsconfig.json` and `*.test.ts` / `*.spec.ts` / `__tests__` files.
-- Python: `test_*.py` / `*_test.py` files (pytest).
+- TypeScript/JavaScript: `*.test.*` / `*.spec.*` (ts, tsx, mts, cts, js, jsx,
+  mjs, cjs) or files under `__tests__`; a `tsconfig.json` enables type checks.
+- Python: `test_*.py` / `*_test.py` files (pytest or unittest).
 - A repo can have both; run both detectors.
 
 ### 2. Safety first
@@ -74,12 +93,34 @@ python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --json /tmp/co-p
 
 Show the user the summary table and the findings before deleting anything.
 
+### 3a. Check test value beyond the scanner
+
+The scripts find mechanical patterns; they cannot decide whether a test owns a
+useful contract or merely repeats another test. For a focused manual audit,
+apply the authoring gate to each review lead or advisory before changing it.
+
+Look especially for expectations copied from the implementation, source-text
+greps, fixtures or mocks that manufacture the asserted result, and negative
+controls that pass because an unrelated guard rejects the input. These are
+**review leads**, not new proven scanner categories. Read the complete test,
+the production path, overlapping tests, and relevant history before deciding.
+Keep tests that independently lock a public API, protocol, security boundary,
+platform behavior, or release artifact, even if they inspect source or run
+slowly. A behavior-preserving refactor breaking a test is a reason to examine
+it, not sufficient evidence to delete it.
+
+Before a manual deletion or rewrite, record the test and location, what it can
+actually detect, the stronger remaining test (or why none is needed), non-test
+callers of any seam to be removed, relevant history, and the focused validation
+command. If the evidence is incomplete, keep the test pending investigation.
+
 ### 4. Understand the two levels
 
 - **proven** — cannot fail, by construction. The scripts guard the known
   escape hatches (`any`/`unknown`, `as` casts, `!`, index signatures, unchecked
-  index access, structural `instanceof`, custom assertion helpers). Safe to
-  auto-delete.
+  index access, structural `instanceof`, custom assertion helpers). Those
+  marked `deletable: safe` are auto-deleted; proven `report-only` findings
+  (swallowed or missed-fail asserts) need a rewrite and `--fix` leaves them.
 - **advisory** — almost certainly useless but *not* provable (assertion-free
   tests, structural instanceof, mock-echo variants, index-signature-backed
   checks, rotten-green conditional asserts, unawaited async assertions). The
@@ -99,8 +140,9 @@ node <skill-dir>/scripts/captain_obvious_ts.mjs --project <repo> --fix
 python3 <skill-dir>/scripts/captain_obvious_py.py --path <repo> --fix
 ```
 
-Plain `--fix` removes only the **proven** findings — no judgment required, no
-LLM. This is the safe deterministic core; run it first.
+Plain `--fix` removes only **proven** findings marked `deletable: safe` — no
+judgment required, no LLM. This is the safe deterministic core; run it first.
+Proven `report-only` findings stay for you to rewrite in step 6.
 
 ### 6. Adjudicate the advisory tier (you decide, then confirm)
 
@@ -113,6 +155,11 @@ finding:
    could sneak in"* → check whether anything actually constructs a non-instance
    of that type; *"mock-echo, indirect"* → check whether a real code path runs
    between stub and assert.
+   Apply the four value questions above before removing an advisory: identify
+   the contract's strongest test owner and check whether this test protects a
+   distinct failure mode. For a bug regression, confirm that the test fails on
+   the pre-fix behavior for the intended reason when a safe baseline is
+   available; a mock that merely produces the expected result is not proof.
 2. Decide one of: **delete** (the doubt doesn't hold — it really is useless),
    **keep** (the doubt holds — it's a real check), or **rewrite** (the intent
    is valid but the assertion is broken). Rewrite is the advisory tier's real
@@ -125,8 +172,8 @@ finding:
    verdict, one-line rationale, and the exact edit for rewrites — and apply
    only what the user approves. Never auto-delete or auto-rewrite an advisory.
 
-For a large advisory set, delegate the per-item code reads to a **Sonnet
-subagent** (batch the findings; have it return verdict + rationale + proposed
+For a large advisory set, delegate the per-item code reads to a **cheaper, faster
+subagent model** (batch the findings; have it return verdict + rationale + proposed
 edit per item) and keep the final proposal/synthesis here — don't burn the main
 loop reading files one by one. The proven tier is never handed to a subagent;
 it's already decided.
@@ -160,11 +207,11 @@ group is the tool earning trust, not failing.
 - Tests asserting via custom helpers (`expectAllow(x)`, `self._check(...)`).
 - "Must not raise" contract tests for fail-open code paths.
 
-## When NOT to run this at all
+## When not to run the cleanup scanner
 
 - **Mid red-green.** During TDD a test is *supposed* to be failing, and a
-  freshly-written test may not have its assertion yet. This is post-hoc
-  cleanup — run it once the suite is green, never between red and green.
+  freshly-written test may not have its assertion yet. Use the authoring gate,
+  but run the cleanup scanner only once the suite is green.
 - **On a branch under review.** Scan (`--json`) is fine; `--fix` is not.
   Rewriting test files while a reviewer or a merge gate is reading the diff
   invalidates what they reviewed.
